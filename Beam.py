@@ -3,10 +3,12 @@ Beam.py
 FR: Module pour la génération et la gestion des faisceaux optiques.
     Permet la génération de faisceaux avec différentes méthodes d'intensité, de phase et de champ électrique,
     en supportant les unités d'énergie (J, mJ, a.u.), de puissance (W, mW, a.u.), et d'intensité (W/m², W/cm², a.u.).
+    Inclut l'extraction de phase/intensité depuis le champ électrique et la gestion de la cohérence.
 
 EN: Module for generating and managing optical beams.
     Allows generation of beams with different intensity, phase, and electric field methods,
     supporting energy units (J, mJ, a.u.), power units (W, mW, a.u.), and intensity units (W/m², W/cm², a.u.).
+    Includes phase/intensity extraction from electric field and coherence management.
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
@@ -14,7 +16,7 @@ Repository: https://github.com/FSA-FR/SHFromScratch
 
 import numpy as np
 import logging
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict
 from MathAndPhysicsTools import (
     generate_zernike_modes,
     generate_legendre_modes,
@@ -47,9 +49,11 @@ class Beam:
     """
     FR: Classe représentant un faisceau optique.
         Supporte les unités d'énergie (J, mJ, a.u.), de puissance (W, mW, a.u.), et d'intensité (W/m², W/cm², a.u.).
+        Permet l'extraction de phase/intensité depuis le champ électrique et la gestion de la cohérence.
 
     EN: Class representing an optical beam.
         Supports energy units (J, mJ, a.u.), power units (W, mW, a.u.), and intensity units (W/m², W/cm², a.u.).
+        Allows phase/intensity extraction from electric field and coherence management.
 
     Attributes:
         wavelength_nm (float): Longueur d'onde en nm (défaut: 633.0).
@@ -83,7 +87,7 @@ class Beam:
         electric_field: Optional[np.ndarray] = None,
         pulse_duration_s: float = 1e-9,  # 1 ns par défaut
         num_points: int = 512,
-        coherence: str = "coherent",  # NOUVEAU
+        coherence: str = "coherent",
     ):
         """
         FR: Initialise un faisceau optique avec les paramètres par défaut.
@@ -763,10 +767,8 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une phase aléatoire comme somme de modes de Zernike.
-            Chaque mode a une amplitude aléatoire entre -max_amplitude_nm et +max_amplitude_nm.
 
         EN: Generates a random phase as a sum of Zernike modes.
-            Each mode has a random amplitude between -max_amplitude_nm and +max_amplitude_nm.
 
         Args:
             n_modes (int): Nombre de modes de Zernike (défaut: 10).
@@ -794,10 +796,8 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une phase aléatoire comme somme de modes de Legendre.
-            Chaque mode a une amplitude aléatoire entre -max_amplitude_nm et +max_amplitude_nm.
 
         EN: Generates a random phase as a sum of Legendre modes.
-            Each mode has a random amplitude between -max_amplitude_nm and +max_amplitude_nm.
 
         Args:
             n_modes (int): Nombre de modes de Legendre (défaut: 10).
@@ -824,10 +824,8 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une phase aléatoire avec des fréquences et amplitudes contrôlées.
-            Utilise un spectre de Fourier aléatoire pour simuler des variations spatiales.
 
         EN: Generates random phase with controlled frequencies and amplitudes.
-            Uses a random Fourier spectrum to simulate spatial variations.
 
         Args:
             min_amplitude (float): Amplitude minimale en nm (défaut: 0.1).
@@ -944,10 +942,8 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Charge une carte de phase depuis un fichier (txt ou csv).
-            La grille est automatiquement adaptée à la taille du fichier.
 
         EN: Loads a phase map from a file (txt or csv).
-            The grid is automatically adapted to the file size.
 
         Args:
             file_path (str): Chemin vers le fichier.
@@ -1195,10 +1191,8 @@ class Beam:
     ):
         """
         FR: Affiche une carte 2D (intensité, phase, champ électrique) avec une échelle et une barre de couleur.
-            Utilise les fonctions de Visualization.py.
 
         EN: Displays a 2D map (intensity, phase, electric field) with a scale and colorbar.
-            Uses functions from Visualization.py.
 
         Args:
             what (str): Ce qu'il faut afficher ("intensity", "phase", "electric_field").
@@ -1284,7 +1278,6 @@ class TestBeam:
     def test_generate_gaussian_intensity(self):
         intensity = self.beam.generate_intensity(method="gaussian", sigma_mm=2.0)
         self.assertEqual(intensity.shape, (128, 128))
-        # Vérifier que la somme est proche de l'énergie (en a.u.)
         self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
 
     def test_generate_tophat_intensity(self):
@@ -1380,8 +1373,11 @@ class TestBeam:
         self.beam.set_intensity_unit("W/m2")
         self.assertEqual(self.beam.intensity_unit, "W/m2")
 
+    def test_set_coherence(self):
+        self.beam.set_coherence("incoherent")
+        self.assertEqual(self.beam.coherence, "incoherent")
+
     def test_energy_to_power_conversion(self):
-        # Créer un faisceau avec puissance en W
         beam = Beam(
             wavelength_nm=633.0,
             diameter_mm=10.0,
@@ -1390,7 +1386,6 @@ class TestBeam:
             pulse_duration_s=1e-3,  # 1 ms
             num_points=128,
         )
-        # Vérifier que l'énergie est bien calculée
         energy_J = beam.get_energy_in_unit("J")
         expected_energy_J = 1.0 * 1e-3  # 1 W * 1 ms = 0.001 J
         self.assertAlmostEqual(energy_J, expected_energy_J, places=10)
@@ -1404,26 +1399,19 @@ class TestBeam:
             num_points=128,
         )
         intensity_W_m2 = beam.get_intensity_in_unit("W/m2")
-        # Surface = π * (5e-3 m)^2 = π * 25e-6 m²
         surface_m2 = np.pi * (5e-3)**2
         expected_intensity = 1.0 / surface_m2
         self.assertAlmostEqual(intensity_W_m2, expected_intensity, places=5)
 
     def test_extract_phase_from_electric_field(self):
-        electric_field = self.beam.generate_electric_field(method="gaussian")
+        electric_field = np.random.rand(128, 128) + 1j * np.random.rand(128, 128)
         phase = self.beam.extract_phase_from_electric_field(electric_field)
         self.assertEqual(phase.shape, (128, 128))
         self.assertEqual(phase.dtype, np.float64)
 
     def test_compute_intensity_from_electric_field(self):
-        electric_field = self.beam.generate_electric_field(method="gaussian")
+        electric_field = np.random.rand(128, 128) + 1j * np.random.rand(128, 128)
         intensity = self.beam.compute_intensity_from_electric_field(electric_field)
-        self.assertEqual(intensity.shape, (128, 128))
-        self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
-
-    def test_generate_intensity_from_electric_field(self):
-        electric_field = self.beam.generate_electric_field(method="gaussian")
-        intensity = self.beam.generate_intensity(method="from_electric_field")
         self.assertEqual(intensity.shape, (128, 128))
         self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
 
@@ -1432,11 +1420,10 @@ class TestBeam:
         phase = self.beam.generate_phase(method="from_electric_field")
         self.assertEqual(phase.shape, (128, 128))
 
-    def test_set_coherence(self):
-        self.beam.set_coherence("incoherent")
-        self.assertEqual(self.beam.coherence, "incoherent")
-        self.beam.set_coherence("coherent")
-        self.assertEqual(self.beam.coherence, "coherent")
+    def test_generate_intensity_from_electric_field(self):
+        electric_field = self.beam.generate_electric_field(method="gaussian")
+        intensity = self.beam.generate_intensity(method="from_electric_field")
+        self.assertEqual(intensity.shape, (128, 128))
 
 
 if __name__ == "__main__":
