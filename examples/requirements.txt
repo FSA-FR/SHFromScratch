@@ -1,0 +1,12 @@
+# Requirements for SHFromScratch examples
+# Install with: pip install -r examples/requirements.txt
+
+# Core dependencies
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+
+# Optional dependencies (for development)
+# pytest>=7.0.0
+# flake8>=4.0.0
+# black>=22.0.0
