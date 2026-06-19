@@ -2,11 +2,11 @@
 MathAndPhysicsTools.py
 FR: Module regroupant les fonctions mathématiques et physiques réutilisables pour le package SHFromScratch.
     Inclut les bases de modes (Zernike, Legendre, Hermite-Gauss, Laguerre-Gauss), les normalisations (PV, RMS),
-    les conversions d'unités, et les outils de grille d'échantillonnage.
+    les conversions d'unités (énergie, puissance, intensité), et les outils de grille d'échantillonnage.
 
 EN: Module grouping reusable mathematical and physical functions for the SHFromScratch package.
     Includes mode bases (Zernike, Legendre, Hermite-Gauss, Laguerre-Gauss), normalizations (PV, RMS),
-    unit conversions, and sampling grid tools.
+    unit conversions (energy, power, intensity), and sampling grid tools.
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
@@ -451,6 +451,7 @@ def normalize_phase(
 # 3. CONVERSIONS D'UNITÉS / UNIT CONVERSIONS
 # =============================================================================
 
+# --- Conversions de phase ---
 def nm_to_rad(phase_nm: Union[np.ndarray, float], wavelength_nm: float) -> Union[np.ndarray, float]:
     """
     FR: Convertit une phase en nm en rad.
@@ -549,6 +550,298 @@ def mrad_to_rad(phase_mrad: Union[np.ndarray, float]) -> Union[np.ndarray, float
         np.ndarray or float: Phase en rad.
     """
     return phase_mrad * 1e-3
+
+
+# --- Conversions d'énergie et de puissance ---
+
+def J_to_mJ(energy_J: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
+    """
+    FR: Convertit une énergie en Joules (J) en milliJoules (mJ).
+
+    EN: Converts energy from Joules (J) to milliJoules (mJ).
+
+    Args:
+        energy_J (np.ndarray or float): Énergie en Joules.
+
+    Returns:
+        np.ndarray or float: Énergie en milliJoules.
+
+    Formula:
+        energy_mJ = energy_J * 1000
+    """
+    return energy_J * 1000
+
+
+def mJ_to_J(energy_mJ: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
+    """
+    FR: Convertit une énergie en milliJoules (mJ) en Joules (J).
+
+    EN: Converts energy from milliJoules (mJ) to Joules (J).
+
+    Args:
+        energy_mJ (np.ndarray or float): Énergie en milliJoules.
+
+    Returns:
+        np.ndarray or float: Énergie en Joules.
+
+    Formula:
+        energy_J = energy_mJ / 1000
+    """
+    return energy_mJ / 1000
+
+
+def W_to_mW(power_W: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
+    """
+    FR: Convertit une puissance en Watts (W) en milliWatts (mW).
+
+    EN: Converts power from Watts (W) to milliWatts (mW).
+
+    Args:
+        power_W (np.ndarray or float): Puissance en Watts.
+
+    Returns:
+        np.ndarray or float: Puissance en milliWatts.
+
+    Formula:
+        power_mW = power_W * 1000
+    """
+    return power_W * 1000
+
+
+def mW_to_W(power_mW: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
+    """
+    FR: Convertit une puissance en milliWatts (mW) en Watts (W).
+
+    EN: Converts power from milliWatts (mW) to Watts (W).
+
+    Args:
+        power_mW (np.ndarray or float): Puissance en milliWatts.
+
+    Returns:
+        np.ndarray or float: Puissance en Watts.
+
+    Formula:
+        power_W = power_mW / 1000
+    """
+    return power_mW / 1000
+
+
+def W_m2_to_W_cm2(intensity_W_m2: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
+    """
+    FR: Convertit une intensité en W/m² en W/cm².
+
+    EN: Converts intensity from W/m² to W/cm².
+
+    Args:
+        intensity_W_m2 (np.ndarray or float): Intensité en W/m².
+
+    Returns:
+        np.ndarray or float: Intensité en W/cm².
+
+    Formula:
+        intensity_W_cm2 = intensity_W_m2 / 10000
+    """
+    return intensity_W_m2 / 10000
+
+
+def W_cm2_to_W_m2(intensity_W_cm2: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
+    """
+    FR: Convertit une intensité en W/cm² en W/m².
+
+    EN: Converts intensity from W/cm² to W/m².
+
+    Args:
+        intensity_W_cm2 (np.ndarray or float): Intensité en W/cm².
+
+    Returns:
+        np.ndarray or float: Intensité en W/m².
+
+    Formula:
+        intensity_W_m2 = intensity_W_cm2 * 10000
+    """
+    return intensity_W_cm2 * 10000
+
+
+# --- Conversions entre énergie, puissance et intensité ---
+
+def energy_to_power(
+    energy: float,
+    energy_unit: str,
+    pulse_duration_s: float,
+    power_unit: str = "W",
+) -> float:
+    """
+    FR: Convertit une énergie en puissance en utilisant la durée d'impulsion.
+
+    EN: Converts energy to power using pulse duration.
+
+    Args:
+        energy (float): Énergie.
+        energy_unit (str): Unité de l'énergie ("J" ou "mJ").
+        pulse_duration_s (float): Durée de l'impulsion en secondes.
+        power_unit (str): Unité de la puissance souhaitée ("W" ou "mW"). Default: "W".
+
+    Returns:
+        float: Puissance dans l'unité spécifiée.
+
+    Formula:
+        power_W = energy_J / pulse_duration_s
+    """
+    # Convertir l'énergie en Joules
+    if energy_unit == "mJ":
+        energy_J = mJ_to_J(energy)
+    elif energy_unit == "J":
+        energy_J = energy
+    else:
+        raise ValueError(f"Unité d'énergie inconnue : {energy_unit}. Utilisez 'J' ou 'mJ'.")
+
+    # Calculer la puissance en Watts
+    power_W = energy_J / pulse_duration_s
+
+    # Convertir en mW si nécessaire
+    if power_unit == "mW":
+        return W_to_mW(power_W)
+    elif power_unit == "W":
+        return power_W
+    else:
+        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
+
+
+def power_to_energy(
+    power: float,
+    power_unit: str,
+    pulse_duration_s: float,
+    energy_unit: str = "J",
+) -> float:
+    """
+    FR: Convertit une puissance en énergie en utilisant la durée d'impulsion.
+
+    EN: Converts power to energy using pulse duration.
+
+    Args:
+        power (float): Puissance.
+        power_unit (str): Unité de la puissance ("W" ou "mW").
+        pulse_duration_s (float): Durée de l'impulsion en secondes.
+        energy_unit (str): Unité de l'énergie souhaitée ("J" ou "mJ"). Default: "J".
+
+    Returns:
+        float: Énergie dans l'unité spécifiée.
+
+    Formula:
+        energy_J = power_W * pulse_duration_s
+    """
+    # Convertir la puissance en Watts
+    if power_unit == "mW":
+        power_W = mW_to_W(power)
+    elif power_unit == "W":
+        power_W = power
+    else:
+        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
+
+    # Calculer l'énergie en Joules
+    energy_J = power_W * pulse_duration_s
+
+    # Convertir en mJ si nécessaire
+    if energy_unit == "mJ":
+        return J_to_mJ(energy_J)
+    elif energy_unit == "J":
+        return energy_J
+    else:
+        raise ValueError(f"Unité d'énergie inconnue : {energy_unit}. Utilisez 'J' ou 'mJ'.")
+
+
+def power_to_intensity(
+    power: float,
+    power_unit: str,
+    diameter_mm: float,
+    intensity_unit: str = "W/m2",
+) -> float:
+    """
+    FR: Convertit une puissance en intensité en utilisant le diamètre du faisceau.
+
+    EN: Converts power to intensity using beam diameter.
+
+    Args:
+        power (float): Puissance du faisceau.
+        power_unit (str): Unité de la puissance ("W" ou "mW").
+        diameter_mm (float): Diamètre du faisceau en mm.
+        intensity_unit (str): Unité d'intensité souhaitée ("W/m2" ou "W/cm2"). Default: "W/m2".
+
+    Returns:
+        float: Intensité dans l'unité spécifiée.
+
+    Formula:
+        intensity_W_m2 = power_W / (π * (radius_m)^2)
+    """
+    # Convertir la puissance en Watts
+    if power_unit == "mW":
+        power_W = mW_to_W(power)
+    elif power_unit == "W":
+        power_W = power
+    else:
+        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
+
+    # Calculer la surface en m²
+    radius_m = diameter_mm / 2000  # Conversion mm → m
+    area_m2 = np.pi * radius_m**2
+
+    # Calculer l'intensité en W/m²
+    intensity_W_m2 = power_W / area_m2
+
+    # Convertir en W/cm² si nécessaire
+    if intensity_unit == "W/cm2":
+        return W_m2_to_W_cm2(intensity_W_m2)
+    elif intensity_unit == "W/m2":
+        return intensity_W_m2
+    else:
+        raise ValueError(f"Unité d'intensité inconnue : {intensity_unit}. Utilisez 'W/m2' ou 'W/cm2'.")
+
+
+def intensity_to_power(
+    intensity: float,
+    intensity_unit: str,
+    diameter_mm: float,
+    power_unit: str = "W",
+) -> float:
+    """
+    FR: Convertit une intensité en puissance en utilisant le diamètre du faisceau.
+
+    EN: Converts intensity to power using beam diameter.
+
+    Args:
+        intensity (float): Intensité du faisceau.
+        intensity_unit (str): Unité de l'intensité ("W/m2" ou "W/cm2").
+        diameter_mm (float): Diamètre du faisceau en mm.
+        power_unit (str): Unité de puissance souhaitée ("W" ou "mW"). Default: "W".
+
+    Returns:
+        float: Puissance dans l'unité spécifiée.
+
+    Formula:
+        power_W = intensity_W_m2 * (π * (radius_m)^2)
+    """
+    # Convertir l'intensité en W/m²
+    if intensity_unit == "W/cm2":
+        intensity_W_m2 = W_cm2_to_W_m2(intensity)
+    elif intensity_unit == "W/m2":
+        intensity_W_m2 = intensity
+    else:
+        raise ValueError(f"Unité d'intensité inconnue : {intensity_unit}. Utilisez 'W/m2' ou 'W/cm2'.")
+
+    # Calculer la surface en m²
+    radius_m = diameter_mm / 2000  # Conversion mm → m
+    area_m2 = np.pi * radius_m**2
+
+    # Calculer la puissance en Watts
+    power_W = intensity_W_m2 * area_m2
+
+    # Convertir en mW si nécessaire
+    if power_unit == "mW":
+        return W_to_mW(power_W)
+    elif power_unit == "W":
+        return power_W
+    else:
+        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
 
 
 # =============================================================================
@@ -695,6 +988,22 @@ def compute_pv_rms(phase: np.ndarray) -> Tuple[float, float]:
     return pv, rms
 
 
+def get_area_mm2(diameter_mm: float) -> float:
+    """
+    FR: Calcule la surface du faisceau en mm².
+
+    EN: Computes the beam area in mm².
+
+    Args:
+        diameter_mm (float): Diamètre du faisceau en mm.
+
+    Returns:
+        float: Surface en mm².
+    """
+    radius_mm = diameter_mm / 2
+    return np.pi * radius_mm**2
+
+
 # =============================================================================
 # 7. TESTS UNITAIRES / UNIT TESTS
 # =============================================================================
@@ -738,6 +1047,72 @@ class TestMathAndPhysicsTools:
         phase_nm = rad_to_nm(phase_rad, 633.0)
         expected = np.array([633.0, 1266.0])
         np.testing.assert_allclose(phase_nm, expected, rtol=1e-5)
+
+    def test_J_to_mJ(self):
+        """Test la conversion J → mJ."""
+        energy_J = 0.001
+        energy_mJ = J_to_mJ(energy_J)
+        assert energy_mJ == 1.0, f"Expected 1.0 mJ, got {energy_mJ}"
+
+    def test_mJ_to_J(self):
+        """Test la conversion mJ → J."""
+        energy_mJ = 1.0
+        energy_J = mJ_to_J(energy_mJ)
+        assert energy_J == 0.001, f"Expected 0.001 J, got {energy_J}"
+
+    def test_W_to_mW(self):
+        """Test la conversion W → mW."""
+        power_W = 0.001
+        power_mW = W_to_mW(power_W)
+        assert power_mW == 1.0, f"Expected 1.0 mW, got {power_mW}"
+
+    def test_mW_to_W(self):
+        """Test la conversion mW → W."""
+        power_mW = 1.0
+        power_W = mW_to_W(power_mW)
+        assert power_W == 0.001, f"Expected 0.001 W, got {power_W}"
+
+    def test_W_m2_to_W_cm2(self):
+        """Test la conversion W/m² → W/cm²."""
+        intensity_W_m2 = 10000.0
+        intensity_W_cm2 = W_m2_to_W_cm2(intensity_W_m2)
+        assert intensity_W_cm2 == 1.0, f"Expected 1.0 W/cm², got {intensity_W_cm2}"
+
+    def test_W_cm2_to_W_m2(self):
+        """Test la conversion W/cm² → W/m²."""
+        intensity_W_cm2 = 1.0
+        intensity_W_m2 = W_cm2_to_W_m2(intensity_W_cm2)
+        assert intensity_W_m2 == 10000.0, f"Expected 10000.0 W/m², got {intensity_W_m2}"
+
+    def test_energy_to_power(self):
+        """Test la conversion énergie → puissance."""
+        energy_mJ = 1.0  # 1 mJ
+        pulse_duration_s = 0.001  # 1 ms
+        power_W = energy_to_power(energy_mJ, "mJ", pulse_duration_s, "W")
+        assert power_W == 1.0, f"Expected 1.0 W, got {power_W}"
+
+    def test_power_to_energy(self):
+        """Test la conversion puissance → énergie."""
+        power_W = 1.0  # 1 W
+        pulse_duration_s = 0.001  # 1 ms
+        energy_mJ = power_to_energy(power_W, "W", pulse_duration_s, "mJ")
+        assert energy_mJ == 1.0, f"Expected 1.0 mJ, got {energy_mJ}"
+
+    def test_power_to_intensity(self):
+        """Test la conversion puissance → intensité."""
+        power_W = 1.0  # 1 W
+        diameter_mm = 10.0  # 10 mm
+        intensity_W_m2 = power_to_intensity(power_W, "W", diameter_mm, "W/m2")
+        expected = 1.0 / (np.pi * (0.005)**2)  # 1 W / (π * (5e-3 m)^2)
+        assert abs(intensity_W_m2 - expected) < 1e-5, f"Expected {expected} W/m², got {intensity_W_m2}"
+
+    def test_intensity_to_power(self):
+        """Test la conversion intensité → puissance."""
+        intensity_W_m2 = 10000.0  # 10000 W/m²
+        diameter_mm = 10.0  # 10 mm
+        power_W = intensity_to_power(intensity_W_m2, "W/m2", diameter_mm, "W")
+        expected = 10000.0 * (np.pi * (0.005)**2)  # 10000 W/m² * (π * (5e-3 m)^2)
+        assert abs(power_W - expected) < 1e-5, f"Expected {expected} W, got {power_W}"
 
     def test_create_grid(self):
         """Test la création d'une grille."""
