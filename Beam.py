@@ -1231,31 +1231,6 @@ class Beam:
         else:
             raise ValueError(f"Type de carte inconnu pour l'affichage : {what}")
 
-    # =========================================================================
-    # Utilitaires / Utilities
-    # =========================================================================
-
-    def compute_pv_rms(self, data: Optional[np.ndarray] = None) -> Tuple[float, float]:
-        """
-        FR: Calcule les valeurs PV (Peak-to-Valley) et RMS (Root Mean Square) d'une carte 2D.
-            Si data est None, utilise self.phase.
-
-        EN: Computes PV (Peak-to-Valley) and RMS (Root Mean Square) values of a 2D map.
-            If data is None, uses self.phase.
-
-        Args:
-            data (np.ndarray, optional): Carte 2D (intensité, phase, etc.).
-
-        Returns:
-            Tuple[float, float]: (PV, RMS).
-        """
-        if data is None:
-            if self.phase is None:
-                self.phase = self.generate_phase()
-            data = self.phase
-        return compute_pv_rms(data)
-
-
 # =============================================================================
 # TESTS UNITAIRES / UNIT TESTS
 # =============================================================================
