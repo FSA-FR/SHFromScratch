@@ -31,6 +31,7 @@ EXAMPLES = [
     "example_5_laguerre_gauss_propagation.py",
     "example_6_resampling_test.py",
     "example_7_normalization_test.py",
+    "example_8_material_behaviour.py",
 ]
 
 # Couleurs pour l'affichage
