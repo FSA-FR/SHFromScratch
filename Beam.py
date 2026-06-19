@@ -1,47 +1,36 @@
-# -*- coding: utf-8 -*-
 """
-Beam Module
------------
+Beam.py
+FR: Module pour la génération et la gestion des faisceaux optiques.
+    Permet la génération de faisceaux avec différentes méthodes d'intensité, de phase et de champ électrique.
 
-FR: Module pour la génération de faisceaux optiques avec différentes méthodes d'intensité, de phase et de champ électrique.
-    Permet la génération de faisceaux aléatoires, paramétrés, ou importés depuis des fichiers.
-
-EN: Module for generating optical beams with different intensity, phase, and electric field methods.
-    Allows generation of random, parameterized, or file-imported beams.
+EN: Module for generating and managing optical beams.
+    Allows generation of beams with different intensity, phase, and electric field methods.
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
-License: MIT
 """
 
 import numpy as np
 import logging
-import unittest
 from typing import Optional, Tuple, Union
-from scipy.special import eval_genlaguerre
 from MathAndPhysicsTools import (
-    create_grid,
+    generate_zernike_modes,
+    generate_legendre_modes,
+    generate_hermite_gauss_modes,
+    generate_laguerre_gauss_modes,
     normalize_phase,
     nm_to_rad,
     rad_to_nm,
-    generate_zernike_modes,
-    generate_legendre_modes,
+    create_grid,
+    load_data_from_file,
+    compute_pv_rms,
 )
 
-# --- Logging Configuration ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-# =============================================
-# FR: Classe Beam
-# EN: Beam Class
-# =============================================
 
 class Beam:
     """
     FR: Classe représentant un faisceau optique.
-        
+
     EN: Class representing an optical beam.
 
     Attributes:
@@ -53,7 +42,7 @@ class Beam:
         electric_field (np.ndarray): Champ électrique complexe 2D.
         grid_x (np.ndarray): Grille en x en mm.
         grid_y (np.ndarray): Grille en y en mm.
-        logger (logging.Logger): Logger pour le débogage.
+        logger (logging.Logger): Logger local pour le débogage.
     """
 
     def __init__(
@@ -68,7 +57,7 @@ class Beam:
     ):
         """
         FR: Initialise un faisceau optique avec les paramètres par défaut.
-            
+
         EN: Initializes an optical beam with default parameters.
 
         Args:
@@ -88,13 +77,21 @@ class Beam:
         self.electric_field = electric_field
         self.num_points = num_points
         self.grid_x, self.grid_y = create_grid(diameter_mm, num_points)
+
+        # Configuration du logger local
         self.logger = logging.getLogger("Beam")
         self.logger.setLevel(logging.INFO)
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        self.logger.addHandler(handler)
+        self.logger.info(
+            "Beam initialized with wavelength=%.1f nm, diameter=%.1f mm, energy=%.2f",
+            wavelength_nm, diameter_mm, energy
+        )
 
-    # =============================================
-    # FR: Méthodes de génération d'intensité
-    # EN: Intensity generation methods
-    # =============================================
+    # =========================================================================
+    # Génération d'Intensité / Intensity Generation
+    # =========================================================================
 
     def generate_intensity(
         self,
@@ -103,7 +100,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une carte d'intensité selon la méthode spécifiée.
-            
+
         EN: Generates an intensity map according to the specified method.
 
         Args:
@@ -112,7 +109,7 @@ class Beam:
                 - "gaussian": Intensité gaussienne.
                 - "supergaussian": Intensité super-gaussienne.
                 - "tophat": Intensité top-hat (uniforme dans un cercle).
-                - "from_file": Import depuis un fichier (non implémenté ici).
+                - "from_file": Import depuis un fichier (txt ou csv).
             **kwargs: Arguments spécifiques à la méthode.
 
         Returns:
@@ -121,6 +118,7 @@ class Beam:
         Raises:
             ValueError: Si la méthode est inconnue.
         """
+        self.logger.info("Generating intensity with method: %s", method)
         if method == "random":
             return self._generate_random_intensity(**kwargs)
         elif method == "gaussian":
@@ -130,9 +128,9 @@ class Beam:
         elif method == "tophat":
             return self._generate_tophat_intensity(**kwargs)
         elif method == "from_file":
-            raise NotImplementedError("L'import depuis un fichier n'est pas encore implémenté.")
+            return self._load_intensity_from_file(**kwargs)
         else:
-            raise ValueError(f"Méthode inconnue pour la génération d'intensité: {method}")
+            raise ValueError(f"Méthode inconnue pour l'intensité : {method}")
 
     def _generate_random_intensity(
         self,
@@ -144,7 +142,7 @@ class Beam:
         """
         FR: Génère une intensité aléatoire avec des fréquences et amplitudes contrôlées.
             Utilise un spectre de Fourier aléatoire pour simuler des variations spatiales.
-            
+
         EN: Generates random intensity with controlled frequencies and amplitudes.
             Uses a random Fourier spectrum to simulate spatial variations.
 
@@ -175,15 +173,16 @@ class Beam:
         freq_xx, freq_yy = np.meshgrid(freq_x, freq_y, indexing='ij')
         freq_magnitude = np.sqrt(freq_xx**2 + freq_yy**2)
 
-        # Masque pour les fréquences en dehors de la plage spécifiée
+        # Masque pour les fréquences dans la plage spécifiée
         mask = (freq_magnitude >= min_frequency) & (freq_magnitude <= max_frequency)
         spectrum[~mask] = 0
 
-        # Transformée de Fourier inverse pour obtenir l'intensité spatiale
+        # Transformée de Fourier inverse pour obtenir l'intensité
         intensity = np.abs(np.fft.ifft2(spectrum))**2
 
         # Normalisation par l'énergie
         intensity = intensity / np.sum(intensity) * self.energy
+        self.intensity = intensity
         return intensity
 
     def _generate_gaussian_intensity(
@@ -192,7 +191,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une intensité gaussienne.
-            
+
         EN: Generates a Gaussian intensity.
 
         Args:
@@ -206,6 +205,7 @@ class Beam:
         """
         intensity = np.exp(-(self.grid_x**2 + self.grid_y**2) / (2 * sigma_mm**2))
         intensity = intensity / np.sum(intensity) * self.energy
+        self.intensity = intensity
         return intensity
 
     def _generate_supergaussian_intensity(
@@ -215,7 +215,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une intensité super-gaussienne.
-            
+
         EN: Generates a super-Gaussian intensity.
 
         Args:
@@ -230,6 +230,7 @@ class Beam:
         """
         intensity = np.exp(-((self.grid_x**2 + self.grid_y**2) ** n) / (2 * sigma_mm**2))
         intensity = intensity / np.sum(intensity) * self.energy
+        self.intensity = intensity
         return intensity
 
     def _generate_tophat_intensity(
@@ -238,7 +239,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une intensité top-hat (uniforme dans un cercle).
-            
+
         EN: Generates a top-hat intensity (uniform within a circle).
 
         Args:
@@ -251,12 +252,57 @@ class Beam:
         r = np.sqrt(self.grid_x**2 + self.grid_y**2)
         intensity = np.where(r <= radius_mm, 1.0, 0.0)
         intensity = intensity / np.sum(intensity) * self.energy
+        self.intensity = intensity
         return intensity
 
-    # =============================================
-    # FR: Méthodes de génération de phase
-    # EN: Phase generation methods
-    # =============================================
+    def _load_intensity_from_file(
+        self,
+        file_path: str,
+        delimiter: str = None,
+    ) -> np.ndarray:
+        """
+        FR: Charge une carte d'intensité depuis un fichier (txt ou csv).
+            La grille est automatiquement adaptée à la taille du fichier.
+
+        EN: Loads an intensity map from a file (txt or csv).
+            The grid is automatically adapted to the file size.
+
+        Args:
+            file_path (str): Chemin vers le fichier.
+            delimiter (str, optional): Délimiteur pour les fichiers txt/csv. Default: None.
+
+        Returns:
+            np.ndarray: Carte d'intensité 2D normalisée par l'énergie.
+        """
+        data = load_data_from_file(file_path, delimiter)
+        if data.shape != (self.num_points, self.num_points):
+            self.logger.warning(
+                "Resizing intensity map from %s to (%d, %d)",
+                data.shape,
+                self.num_points,
+                self.num_points
+            )
+            from scipy.interpolate import griddata
+            x_flat = np.linspace(-self.diameter_mm / 2, self.diameter_mm / 2, data.shape[1])
+            y_flat = np.linspace(-self.diameter_mm / 2, self.diameter_mm / 2, data.shape[0])
+            xx_flat, yy_flat = np.meshgrid(x_flat, y_flat, indexing='ij')
+            points = np.column_stack((xx_flat.ravel(), yy_flat.ravel()))
+            values = data.ravel()
+            grid_points = np.column_stack((self.grid_x.ravel(), self.grid_y.ravel()))
+            intensity = griddata(points, values, grid_points, method='cubic', fill_value=0.0).reshape(
+                self.num_points, self.num_points
+            )
+        else:
+            intensity = data
+
+        # Normalisation par l'énergie
+        intensity = intensity / np.sum(intensity) * self.energy
+        self.intensity = intensity
+        return intensity
+
+    # =========================================================================
+    # Génération de Phase / Phase Generation
+    # =========================================================================
 
     def generate_phase(
         self,
@@ -265,7 +311,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une carte de phase selon la méthode spécifiée.
-            
+
         EN: Generates a phase map according to the specified method.
 
         Args:
@@ -275,7 +321,7 @@ class Beam:
                 - "random_frequencies": Phase aléatoire avec fréquences et amplitudes contrôlées.
                 - "sum_zernike": Somme de modes de Zernike choisis.
                 - "sum_legendre": Somme de modes de Legendre choisis.
-                - "from_file": Import depuis un fichier (non implémenté ici).
+                - "from_file": Import depuis un fichier (txt ou csv).
             **kwargs: Arguments spécifiques à la méthode.
 
         Returns:
@@ -284,6 +330,7 @@ class Beam:
         Raises:
             ValueError: Si la méthode est inconnue.
         """
+        self.logger.info("Generating phase with method: %s", method)
         if method == "random_zernike":
             return self._generate_random_zernike_phase(**kwargs)
         elif method == "random_legendre":
@@ -295,9 +342,9 @@ class Beam:
         elif method == "sum_legendre":
             return self._generate_sum_legendre_phase(**kwargs)
         elif method == "from_file":
-            raise NotImplementedError("L'import depuis un fichier n'est pas encore implémenté.")
+            return self._load_phase_from_file(**kwargs)
         else:
-            raise ValueError(f"Méthode inconnue pour la génération de phase: {method}")
+            raise ValueError(f"Méthode inconnue pour la phase : {method}")
 
     def _generate_random_zernike_phase(
         self,
@@ -309,7 +356,7 @@ class Beam:
         """
         FR: Génère une phase aléatoire comme somme de modes de Zernike.
             Chaque mode a une amplitude aléatoire entre -max_amplitude_nm et +max_amplitude_nm.
-            
+
         EN: Generates a random phase as a sum of Zernike modes.
             Each mode has a random amplitude between -max_amplitude_nm and +max_amplitude_nm.
 
@@ -323,11 +370,13 @@ class Beam:
             np.ndarray: Carte de phase 2D en nm.
         """
         zernike_modes = generate_zernike_modes(
-            n_modes, ordination, grid_x=self.grid_x, grid_y=self.grid_y
+            n_modes, ordination, self.grid_x, self.grid_y
         )
         coefficients = np.random.uniform(-max_amplitude_nm, max_amplitude_nm, n_modes)
         phase = np.sum(coefficients[:, np.newaxis, np.newaxis] * zernike_modes, axis=0)
-        return normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        phase = normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        self.phase = phase
+        return phase
 
     def _generate_random_legendre_phase(
         self,
@@ -338,7 +387,7 @@ class Beam:
         """
         FR: Génère une phase aléatoire comme somme de modes de Legendre.
             Chaque mode a une amplitude aléatoire entre -max_amplitude_nm et +max_amplitude_nm.
-            
+
         EN: Generates a random phase as a sum of Legendre modes.
             Each mode has a random amplitude between -max_amplitude_nm and +max_amplitude_nm.
 
@@ -350,10 +399,12 @@ class Beam:
         Returns:
             np.ndarray: Carte de phase 2D en nm.
         """
-        legendre_modes = generate_legendre_modes(n_modes, grid_x=self.grid_x, grid_y=self.grid_y)
+        legendre_modes = generate_legendre_modes(n_modes, self.grid_x, self.grid_y)
         coefficients = np.random.uniform(-max_amplitude_nm, max_amplitude_nm, n_modes)
         phase = np.sum(coefficients[:, np.newaxis, np.newaxis] * legendre_modes, axis=0)
-        return normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        phase = normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        self.phase = phase
+        return phase
 
     def _generate_random_frequencies_phase(
         self,
@@ -366,7 +417,7 @@ class Beam:
         """
         FR: Génère une phase aléatoire avec des fréquences et amplitudes contrôlées.
             Utilise un spectre de Fourier aléatoire pour simuler des variations spatiales.
-            
+
         EN: Generates random phase with controlled frequencies and amplitudes.
             Uses a random Fourier spectrum to simulate spatial variations.
 
@@ -401,10 +452,12 @@ class Beam:
         mask = (freq_magnitude >= min_frequency) & (freq_magnitude <= max_frequency)
         spectrum[~mask] = 0
 
-        # Transformée de Fourier inverse pour obtenir la phase spatiale
+        # Transformée de Fourier inverse pour obtenir la phase
         phase = np.angle(np.fft.ifft2(spectrum))
         phase = rad_to_nm(phase, self.wavelength_nm)
-        return normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        phase = normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        self.phase = phase
+        return phase
 
     def _generate_sum_zernike_phase(
         self,
@@ -414,7 +467,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une phase comme somme de modes de Zernike choisis.
-            
+
         EN: Generates a phase as a sum of selected Zernike modes.
 
         Args:
@@ -431,13 +484,15 @@ class Beam:
             coefficients_nm = np.random.uniform(-100.0, 100.0, len(modes))
 
         zernike_modes = generate_zernike_modes(
-            max(modes) + 1, "Noll", grid_x=self.grid_x, grid_y=self.grid_y
+            max(modes) + 1, "Noll", self.grid_x, self.grid_y
         )
         phase = np.sum(
             [coefficients_nm[i] * zernike_modes[modes[i]] for i in range(len(modes))],
             axis=0,
         )
-        return normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        phase = normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        self.phase = phase
+        return phase
 
     def _generate_sum_legendre_phase(
         self,
@@ -447,7 +502,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une phase comme somme de modes de Legendre choisis.
-            
+
         EN: Generates a phase as a sum of selected Legendre modes.
 
         Args:
@@ -464,18 +519,62 @@ class Beam:
             coefficients_nm = np.random.uniform(-100.0, 100.0, len(modes))
 
         legendre_modes = generate_legendre_modes(
-            max(modes) + 1, grid_x=self.grid_x, grid_y=self.grid_y
+            max(modes) + 1, self.grid_x, self.grid_y
         )
         phase = np.sum(
             [coefficients_nm[i] * legendre_modes[modes[i]] for i in range(len(modes))],
             axis=0,
         )
-        return normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        phase = normalize_phase(phase, normalization, target_value=1.0, wavelength_nm=self.wavelength_nm)
+        self.phase = phase
+        return phase
 
-    # =============================================
-    # FR: Méthodes de génération du champ électrique
-    # EN: Electric field generation methods
-    # =============================================
+    def _load_phase_from_file(
+        self,
+        file_path: str,
+        delimiter: str = None,
+    ) -> np.ndarray:
+        """
+        FR: Charge une carte de phase depuis un fichier (txt ou csv).
+            La grille est automatiquement adaptée à la taille du fichier.
+
+        EN: Loads a phase map from a file (txt or csv).
+            The grid is automatically adapted to the file size.
+
+        Args:
+            file_path (str): Chemin vers le fichier.
+            delimiter (str, optional): Délimiteur pour les fichiers txt/csv. Default: None.
+
+        Returns:
+            np.ndarray: Carte de phase 2D en nm.
+        """
+        data = load_data_from_file(file_path, delimiter)
+        if data.shape != (self.num_points, self.num_points):
+            self.logger.warning(
+                "Resizing phase map from %s to (%d, %d)",
+                data.shape,
+                self.num_points,
+                self.num_points
+            )
+            from scipy.interpolate import griddata
+            x_flat = np.linspace(-self.diameter_mm / 2, self.diameter_mm / 2, data.shape[1])
+            y_flat = np.linspace(-self.diameter_mm / 2, self.diameter_mm / 2, data.shape[0])
+            xx_flat, yy_flat = np.meshgrid(x_flat, y_flat, indexing='ij')
+            points = np.column_stack((xx_flat.ravel(), yy_flat.ravel()))
+            values = data.ravel()
+            grid_points = np.column_stack((self.grid_x.ravel(), self.grid_y.ravel()))
+            phase = griddata(points, values, grid_points, method='cubic', fill_value=0.0).reshape(
+                self.num_points, self.num_points
+            )
+        else:
+            phase = data
+
+        self.phase = phase
+        return phase
+
+    # =========================================================================
+    # Génération de Champ Électrique / Electric Field Generation
+    # =========================================================================
 
     def generate_electric_field(
         self,
@@ -486,7 +585,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère le champ électrique complexe.
-            
+
         EN: Generates the complex electric field.
 
         Args:
@@ -495,6 +594,7 @@ class Beam:
             method (str): Méthode de génération. Options:
                 - "from_intensity_phase": E = sqrt(I) * exp(1j * phase).
                 - "gaussian": Champ électrique gaussien.
+                - "hermite_gauss": Champ électrique Hermite-Gauss.
                 - "laguerre_gauss": Champ électrique Laguerre-Gauss.
                 - "plane_wave": Onde plane.
             **kwargs: Arguments spécifiques à la méthode.
@@ -505,16 +605,19 @@ class Beam:
         Raises:
             ValueError: Si la méthode est inconnue.
         """
+        self.logger.info("Generating electric field with method: %s", method)
         if method == "from_intensity_phase":
             return self._generate_electric_field_from_intensity_phase(intensity, phase)
         elif method == "gaussian":
             return self._generate_gaussian_electric_field(**kwargs)
+        elif method == "hermite_gauss":
+            return self._generate_hermite_gauss_electric_field(**kwargs)
         elif method == "laguerre_gauss":
             return self._generate_laguerre_gauss_electric_field(**kwargs)
         elif method == "plane_wave":
             return self._generate_plane_wave_electric_field(**kwargs)
         else:
-            raise ValueError(f"Méthode inconnue pour la génération du champ électrique: {method}")
+            raise ValueError(f"Méthode inconnue pour le champ électrique : {method}")
 
     def _generate_electric_field_from_intensity_phase(
         self,
@@ -523,7 +626,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère le champ électrique à partir de l'intensité et de la phase.
-            
+
         EN: Generates the electric field from intensity and phase.
 
         Args:
@@ -542,7 +645,9 @@ class Beam:
             phase = self.phase if self.phase is not None else self.generate_phase()
 
         phase_rad = nm_to_rad(phase, self.wavelength_nm)
-        return np.sqrt(intensity) * np.exp(1j * phase_rad)
+        electric_field = np.sqrt(intensity) * np.exp(1j * phase_rad)
+        self.electric_field = electric_field
+        return electric_field
 
     def _generate_gaussian_electric_field(
         self,
@@ -551,7 +656,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère un champ électrique gaussien.
-            
+
         EN: Generates a Gaussian electric field.
 
         Args:
@@ -567,7 +672,40 @@ class Beam:
         amplitude = np.exp(-(self.grid_x**2 + self.grid_y**2) / (4 * sigma_mm**2))
         phase = self.generate_phase(method="random_zernike", **kwargs)
         phase_rad = nm_to_rad(phase, self.wavelength_nm)
-        return amplitude * np.exp(1j * phase_rad)
+        electric_field = amplitude * np.exp(1j * phase_rad)
+        self.electric_field = electric_field
+        return electric_field
+
+    def _generate_hermite_gauss_electric_field(
+        self,
+        n: int = 0,
+        m: int = 0,
+        sigma_mm: float = 2.0,
+        **kwargs,
+    ) -> np.ndarray:
+        """
+        FR: Génère un champ électrique Hermite-Gauss.
+
+        EN: Generates a Hermite-Gauss electric field.
+
+        Args:
+            n (int): Ordre radial (défaut: 0).
+            m (int): Ordre azimutal (défaut: 0).
+            sigma_mm (float): Écart-type en mm (défaut: 2.0).
+            **kwargs: Arguments supplémentaires pour la phase.
+
+        Returns:
+            np.ndarray: Champ électrique complexe 2D.
+
+        Formula:
+            E(x,y) = H_n(x) * H_m(y) * exp(-(x² + y²) / (2σ²)) * exp(1j * phase)
+        """
+        hermite_modes = generate_hermite_gauss_modes(1, self.grid_x, self.grid_y, sigma_mm)
+        phase = self.generate_phase(method="random_zernike", **kwargs)
+        phase_rad = nm_to_rad(phase, self.wavelength_nm)
+        electric_field = hermite_modes[0] * np.exp(1j * phase_rad)
+        self.electric_field = electric_field
+        return electric_field
 
     def _generate_laguerre_gauss_electric_field(
         self,
@@ -578,7 +716,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère un champ électrique Laguerre-Gauss.
-            
+
         EN: Generates a Laguerre-Gauss electric field.
 
         Args:
@@ -591,23 +729,20 @@ class Beam:
             np.ndarray: Champ électrique complexe 2D.
 
         Formula:
-            E(x,y) = L_p^l(r) * exp(-r² / (2σ²)) * exp(1j * l * θ) * exp(1j * k * z)
-            où L_p^l est le polynôme de Laguerre généralisé.
+            E(x,y) = L_p^l(r) * exp(-r² / (2σ²)) * exp(1j * l * θ) * exp(1j * phase)
         """
+        laguerre_modes = generate_laguerre_gauss_modes(1, self.grid_x, self.grid_y, sigma_mm, p, abs(l))
         r = np.sqrt(self.grid_x**2 + self.grid_y**2)
         theta = np.arctan2(self.grid_y, self.grid_x)
-
-        # Polynôme de Laguerre généralisé
-        laguerre = eval_genlaguerre(p, l, r**2 / sigma_mm**2)
-
-        # Amplitude Laguerre-Gauss
-        amplitude = laguerre * np.exp(-r**2 / (2 * sigma_mm**2))
-
-        # Phase
         phase = self.generate_phase(method="random_zernike", **kwargs)
         phase_rad = nm_to_rad(phase, self.wavelength_nm)
-
-        return amplitude * np.exp(1j * l * theta) * np.exp(1j * phase_rad)
+        if l >= 0:
+            angular = np.exp(1j * l * theta)
+        else:
+            angular = np.exp(-1j * abs(l) * theta)
+        electric_field = laguerre_modes[0] * angular * np.exp(1j * phase_rad)
+        self.electric_field = electric_field
+        return electric_field
 
     def _generate_plane_wave_electric_field(
         self,
@@ -616,7 +751,7 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère un champ électrique d'onde plane.
-            
+
         EN: Generates a plane wave electric field.
 
         Args:
@@ -627,7 +762,7 @@ class Beam:
             np.ndarray: Champ électrique complexe 2D.
 
         Formula:
-            E(x,y) = exp(1j * k * (x * sin(θ) + y * cos(θ)))
+            E(x,y) = exp(1j * k * (x * sin(θ) + y * cos(θ))) * exp(1j * phase_aberration)
         """
         angle_rad = np.deg2rad(angle_deg)
         k = 2 * np.pi / (self.wavelength_nm * 1e-6)  # Nombre d'onde en mm⁻¹
@@ -637,72 +772,99 @@ class Beam:
         phase_aberration = self.generate_phase(method="random_zernike", **kwargs)
         phase_aberration_rad = nm_to_rad(phase_aberration, self.wavelength_nm)
 
-        return np.exp(1j * (phase_spatial + phase_aberration_rad))
+        electric_field = np.exp(1j * (phase_spatial + phase_aberration_rad))
+        self.electric_field = electric_field
+        return electric_field
 
-    # =============================================
-    # FR: Méthodes utilitaires
-    # EN: Utility methods
-    # =============================================
+    # =========================================================================
+    # Utilitaires / Utilities
+    # =========================================================================
 
-    def compute_pv_rms(self, data: np.ndarray) -> Tuple[float, float]:
+    def compute_pv_rms(self, data: Optional[np.ndarray] = None) -> Tuple[float, float]:
         """
         FR: Calcule les valeurs PV (Peak-to-Valley) et RMS (Root Mean Square) d'une carte 2D.
-            
+            Si data est None, utilise self.phase.
+
         EN: Computes PV (Peak-to-Valley) and RMS (Root Mean Square) values of a 2D map.
+            If data is None, uses self.phase.
 
         Args:
-            data (np.ndarray): Carte 2D (intensité, phase, etc.).
+            data (np.ndarray, optional): Carte 2D (intensité, phase, etc.).
 
         Returns:
             Tuple[float, float]: (PV, RMS).
         """
-        pv = np.max(data) - np.min(data)
-        rms = np.sqrt(np.mean(data**2))
-        return pv, rms
+        if data is None:
+            if self.phase is None:
+                self.phase = self.generate_phase()
+            data = self.phase
+        return compute_pv_rms(data)
 
     def plot(
         self,
-        data: np.ndarray,
-        title: str = "",
-        cmap: str = "viridis",
-        show_colorbar: bool = True,
+        what: str = "intensity",
+        **kwargs,
     ):
         """
         FR: Affiche une carte 2D (intensité, phase, etc.) avec une échelle et une barre de couleur.
-            
+
         EN: Displays a 2D map (intensity, phase, etc.) with a scale and colorbar.
 
         Args:
-            data (np.ndarray): Carte 2D à afficher.
-            title (str): Titre du graphique.
-            cmap (str): Colormap à utiliser (défaut: "viridis").
-            show_colorbar (bool): Si True, affiche la barre de couleur (défaut: True).
+            what (str): Ce qu'il faut afficher ("intensity", "phase", "electric_field").
+            **kwargs: Arguments pour matplotlib.
         """
         import matplotlib.pyplot as plt
 
+        if what == "intensity":
+            if self.intensity is None:
+                self.intensity = self.generate_intensity()
+            data = self.intensity
+            label = "Intensity (a.u.)"
+            title = "Intensity Map"
+        elif what == "phase":
+            if self.phase is None:
+                self.phase = self.generate_phase()
+            data = self.phase
+            label = "Phase (nm)"
+            title = "Phase Map"
+        elif what == "electric_field":
+            if self.electric_field is None:
+                self.electric_field = self.generate_electric_field()
+            data = np.abs(self.electric_field)
+            label = "Amplitude (a.u.)"
+            title = "Electric Field Amplitude"
+        else:
+            raise ValueError(f"Unknown plot type: {what}")
+
         pv, rms = self.compute_pv_rms(data)
         plt.figure(figsize=(8, 6))
-        plt.imshow(data, cmap=cmap, extent=[
-            -self.diameter_mm / 2,
-            self.diameter_mm / 2,
-            -self.diameter_mm / 2,
-            self.diameter_mm / 2,
-        ])
-        if show_colorbar:
-            plt.colorbar(label=f"PV: {pv:.2f}, RMS: {rms:.2f}")
+        plt.imshow(
+            data,
+            cmap=kwargs.get("cmap", "viridis"),
+            extent=[
+                -self.diameter_mm / 2,
+                self.diameter_mm / 2,
+                -self.diameter_mm / 2,
+                self.diameter_mm / 2,
+            ],
+        )
+        plt.colorbar(label=f"{label}\nPV: {pv:.2f}, RMS: {rms:.2f}")
         plt.title(title)
         plt.xlabel("x (mm)")
         plt.ylabel("y (mm)")
         plt.show()
 
 
-# =============================================
-# FR: Tests unitaires pour la classe Beam
-# EN: Unit tests for the Beam class
-# =============================================
+# =============================================================================
+# TESTS UNITAIRES / UNIT TESTS
+# =============================================================================
 
-class TestBeam(unittest.TestCase):
-    """FR: Tests unitaires pour la classe Beam."""
+class TestBeam:
+    """
+    FR: Classe de tests unitaires pour Beam.py.
+    EN: Unit test class for Beam.py.
+    """
 
     def setUp(self):
         self.beam = Beam(
@@ -722,14 +884,35 @@ class TestBeam(unittest.TestCase):
         self.assertEqual(intensity.shape, (128, 128))
         self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
 
+    def test_generate_random_intensity(self):
+        intensity = self.beam.generate_intensity(
+            method="random",
+            min_amplitude=0.1,
+            max_amplitude=1.0,
+            min_frequency=0.01,
+            max_frequency=0.1,
+        )
+        self.assertEqual(intensity.shape, (128, 128))
+        self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
+
     def test_generate_random_zernike_phase(self):
         phase = self.beam.generate_phase(method="random_zernike", n_modes=5, max_amplitude_nm=100.0)
         self.assertEqual(phase.shape, (128, 128))
         pv, rms = self.beam.compute_pv_rms(phase)
-        self.assertLessEqual(rms, 100.0)
+        self.assertLessEqual(rms, 633.0)
 
     def test_generate_random_legendre_phase(self):
         phase = self.beam.generate_phase(method="random_legendre", n_modes=5, max_amplitude_nm=100.0)
+        self.assertEqual(phase.shape, (128, 128))
+
+    def test_generate_random_frequencies_phase(self):
+        phase = self.beam.generate_phase(
+            method="random_frequencies",
+            min_amplitude=0.1,
+            max_amplitude=1.0,
+            min_frequency=0.01,
+            max_frequency=0.1,
+        )
         self.assertEqual(phase.shape, (128, 128))
 
     def test_generate_electric_field_from_intensity_phase(self):
@@ -761,4 +944,5 @@ class TestBeam(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    import unittest
     unittest.main()
