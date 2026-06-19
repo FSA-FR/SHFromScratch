@@ -25,7 +25,7 @@ from MathAndPhysicsTools import (
     rad_to_nm,
     create_grid,
     load_data_from_file,
-    compute_pv_rms,
+    compute_pv_rms,  # Déplacée depuis Beam.py
     # Conversions d'unités
     J_to_mJ, mJ_to_J,
     W_to_mW, mW_to_W,
@@ -33,6 +33,13 @@ from MathAndPhysicsTools import (
     energy_to_power, power_to_energy,
     power_to_intensity, intensity_to_power,
     get_area_mm2,
+)
+from Visualization import (
+    plot_beam_map,
+    plot_intensity,
+    plot_phase,
+    plot_electric_field_amplitude,
+    plot_electric_field_phase,
 )
 
 
@@ -425,9 +432,6 @@ class Beam:
             # Calculer l'intensité moyenne en W/m²
             intensity_W_m2 = power_to_intensity(power_W, "W", self.diameter_mm, "W/m2")
             # Calculer la surface en pixels
-            area_px = np.pi * (self.diameter_mm / 2)**2  # Approximation de la surface en mm²
-            # Normaliser l'intensité pour que la somme corresponde à l'énergie
-            # Intensité (W/m²) * surface (m²) * durée (s) = énergie (J)
             surface_m2 = get_area_mm2(self.diameter_mm) * 1e-6  # mm² → m²
             total_energy_J = intensity_W_m2 * surface_m2 * self.pulse_duration_s
             # Normaliser l'intensité pour que la somme = énergie_J
@@ -1083,6 +1087,59 @@ class Beam:
         return electric_field
 
     # =========================================================================
+    # Méthodes d'affichage / Plotting Methods
+    # =========================================================================
+
+    def plot(
+        self,
+        what: str = "intensity",
+        **kwargs,
+    ):
+        """
+        FR: Affiche une carte 2D (intensité, phase, champ électrique) avec une échelle et une barre de couleur.
+            Utilise les fonctions de Visualization.py.
+
+        EN: Displays a 2D map (intensity, phase, electric field) with a scale and colorbar.
+            Uses functions from Visualization.py.
+
+        Args:
+            what (str): Ce qu'il faut afficher ("intensity", "phase", "electric_field").
+            **kwargs: Arguments supplémentaires pour les fonctions de Visualization.
+
+        Raises:
+            ValueError: Si le type de carte est inconnu.
+        """
+        if what == "intensity":
+            if self.intensity is None:
+                self.intensity = self.generate_intensity()
+            if self.intensity_unit != "a.u.":
+                label = f"Intensity ({self.intensity_unit})"
+            else:
+                label = "Intensity (a.u.)"
+            plot_beam_map(
+                self.intensity,
+                self.diameter_mm,
+                title="Intensity Map",
+                label=label,
+                **kwargs,
+            )
+        elif what == "phase":
+            if self.phase is None:
+                self.phase = self.generate_phase()
+            plot_phase(self.phase, self.diameter_mm, title="Phase Map", **kwargs)
+        elif what == "electric_field":
+            if self.electric_field is None:
+                self.electric_field = self.generate_electric_field()
+            plot_electric_field_amplitude(
+                self.electric_field,
+                self.diameter_mm,
+                title="Electric Field Amplitude",
+                **kwargs,
+            )
+        else:
+            raise ValueError(f"Type de carte inconnu pour l'affichage : {what}")
+
+    # =========================================================================
     # Utilitaires / Utilities
     # =========================================================================
 
@@ -1105,64 +1162,6 @@ class Beam:
                 self.phase = self.generate_phase()
             data = self.phase
         return compute_pv_rms(data)
-
-    def plot(
-        self,
-        what: str = "intensity",
-        **kwargs,
-    ):
-        """
-        FR: Affiche une carte 2D (intensité, phase, etc.) avec une échelle et une barre de couleur.
-
-        EN: Displays a 2D map (intensity, phase, etc.) with a scale and colorbar.
-
-        Args:
-            what (str): Ce qu'il faut afficher ("intensity", "phase", "electric_field").
-            **kwargs: Arguments pour matplotlib.
-        """
-        import matplotlib.pyplot as plt
-
-        if what == "intensity":
-            if self.intensity is None:
-                self.intensity = self.generate_intensity()
-            data = self.intensity
-            if self.intensity_unit != "a.u.":
-                label = f"Intensity ({self.intensity_unit})"
-            else:
-                label = "Intensity (a.u.)"
-            title = "Intensity Map"
-        elif what == "phase":
-            if self.phase is None:
-                self.phase = self.generate_phase()
-            data = self.phase
-            label = "Phase (nm)"
-            title = "Phase Map"
-        elif what == "electric_field":
-            if self.electric_field is None:
-                self.electric_field = self.generate_electric_field()
-            data = np.abs(self.electric_field)
-            label = "Amplitude (a.u.)"
-            title = "Electric Field Amplitude"
-        else:
-            raise ValueError(f"Unknown plot type: {what}")
-
-        pv, rms = self.compute_pv_rms(data)
-        plt.figure(figsize=(8, 6))
-        plt.imshow(
-            data,
-            cmap=kwargs.get("cmap", "viridis"),
-            extent=[
-                -self.diameter_mm / 2,
-                self.diameter_mm / 2,
-                -self.diameter_mm / 2,
-                self.diameter_mm / 2,
-            ],
-        )
-        plt.colorbar(label=f"{label}\nPV: {pv:.2f}, RMS: {rms:.2f}")
-        plt.title(title)
-        plt.xlabel("x (mm)")
-        plt.ylabel("y (mm)")
-        plt.show()
 
 
 # =============================================================================
