@@ -17,6 +17,7 @@ Repository: https://github.com/FSA-FR/SHFromScratch
 """
 
 import numpy as np
+import math  # CORRECTION: Utilisation de math.factorial
 import logging
 from typing import Optional, Tuple, Union, Dict, List
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
@@ -26,8 +27,6 @@ from MathAndPhysicsTools import (
     compute_pv_rms,
     nm_to_rad,
     rad_to_nm,
-    rad_to_mrad,
-    resample_to_grid,
 )
 
 
@@ -263,11 +262,7 @@ class Propagation:
         # Propagation par étapes
         while remaining_distance > step_mm:
             current_step = min(step_mm, remaining_distance)
-
-            # Calculer le facteur de phase pour l'espace réel
             real_phase = np.exp(1j * k * current_step)
-
-            # Calculer le facteur de phase pour l'espace de Fourier
             dx = input_grid_x[0, 1] - input_grid_x[0, 0]  # Pas spatial en mm
             fx = np.fft.fftfreq(input_grid_x.shape[1], d=dx)
             fy = np.fft.fftfreq(input_grid_x.shape[0], d=dx)
@@ -441,7 +436,6 @@ class Propagation:
                     "intensity_propagated": Carte d'intensité propagée (2D),
                     "phase_initial": Carte de phase initiale (2D, nm),
                     "phase_propagated": Carte de phase propagée (2D, nm),
-                    "projection_error": Erreur de projection (RMS des coefficients ignorés).
                   }
 
         Notes:
@@ -654,9 +648,7 @@ class Propagation:
             # et on ignore les effets d'interférence
             if isinstance(result, tuple):
                 propagated_field, metrics = result
-                intensity_field = np.abs(propagated_field)**2
-                metrics["coherence"] = "incoherent"
-                result = (intensity_field, metrics)
+                result = (np.abs(propagated_field)**2, metrics)
             else:
                 result = np.abs(result)**2
             self.logger.warning("Incoherent propagation: returning intensity only (no phase information)")
@@ -801,8 +793,8 @@ class Propagation:
         # Gaussienne
         gauss = np.exp(-(grid_x**2 + grid_y**2) / (2 * sigma_mm**2))
 
-        # Normalisation
-        norm_factor = 1.0 / (sigma_mm * np.sqrt(2**(n + m) * np.math.factorial(n) * np.math.factorial(m) * np.pi))
+        # Normalisation (CORRECTION: math.factorial)
+        norm_factor = 1.0 / (sigma_mm * np.sqrt(2**(n + m) * math.factorial(n) * math.factorial(m) * np.pi))
 
         return norm_factor * H_n * H_m * gauss
 
@@ -854,8 +846,8 @@ class Propagation:
         H_m = hermite(m)(grid_y / sigma_z)
         gauss = np.exp(-(grid_x**2 + grid_y**2) / (2 * sigma_z**2))
 
-        # Normalisation
-        norm_factor = 1.0 / (sigma_z * np.sqrt(2**(n + m) * np.math.factorial(n) * np.math.factorial(m) * np.pi))
+        # Normalisation (CORRECTION: math.factorial)
+        norm_factor = 1.0 / (sigma_z * np.sqrt(2**(n + m) * math.factorial(n) * math.factorial(m) * np.pi))
 
         # Facteur d'amplitude (conservation de l'énergie)
         amplitude_factor = sigma_0_mm / sigma_z
@@ -952,8 +944,8 @@ class Propagation:
         Formula:
             LG_{p,l}(r,θ) = (√(2p!/(π(p+|l|)!)) / σ) * L_p^{|l|}(2r²/σ²) * exp(-r²/σ²) * exp(1j * lθ)
         """
-        # Polynôme de Laguerre généralisé
-        L_pl = eval_genlaguerre(p, abs(l))(2 * r**2 / sigma_mm**2)
+        # Polynôme de Laguerre généralisé (CORRECTION: 3 arguments)
+        L_pl = eval_genlaguerre(p, abs(l), 2 * r**2 / sigma_mm**2)
 
         # Gaussienne
         gauss = np.exp(-r**2 / sigma_mm**2)
@@ -964,8 +956,8 @@ class Propagation:
         else:
             angular = np.exp(-1j * abs(l) * theta)
 
-        # Normalisation
-        norm_factor = np.sqrt(2 * np.math.factorial(p) / (np.pi * np.math.factorial(p + abs(l)))) / sigma_mm
+        # Normalisation (CORRECTION: math.factorial)
+        norm_factor = np.sqrt(2 * math.factorial(p) / (np.pi * math.factorial(p + abs(l)))) / sigma_mm
 
         return norm_factor * L_pl * gauss * angular
 
@@ -1016,8 +1008,8 @@ class Propagation:
         # Phase de Gouy
         gouy_phase = (2 * p + abs(l) + 1) * np.arctan(self.propagation_distance_mm / z_R)
 
-        # Générer le mode propagé
-        L_pl = eval_genlaguerre(p, abs(l))(2 * r**2 / sigma_z**2)
+        # Générer le mode propagé (CORRECTION: eval_genlaguerre avec 3 arguments)
+        L_pl = eval_genlaguerre(p, abs(l), 2 * r**2 / sigma_z**2)
         gauss = np.exp(-r**2 / sigma_z**2)
 
         if l >= 0:
@@ -1025,8 +1017,8 @@ class Propagation:
         else:
             angular = np.exp(-1j * abs(l) * theta)
 
-        # Normalisation
-        norm_factor = np.sqrt(2 * np.math.factorial(p) / (np.pi * np.math.factorial(p + abs(l)))) / sigma_z
+        # Normalisation (CORRECTION: math.factorial)
+        norm_factor = np.sqrt(2 * math.factorial(p) / (np.pi * math.factorial(p + abs(l)))) / sigma_z
 
         # Facteur d'amplitude (conservation de l'énergie)
         amplitude_factor = sigma_0_mm / sigma_z
@@ -1115,7 +1107,7 @@ class Propagation:
         # Erreur sur l'intensité
         intensity_diff = intensity_initial_norm - intensity_propagated_norm
         intensity_error_pv = float(np.max(intensity_diff) - np.min(intensity_diff))
-        intensity_error_rms = float(np.sqrt(np.mean(intensity_diff**2))))
+        intensity_error_rms = float(np.sqrt(np.mean(intensity_diff**2)))
 
         # Calculer les phases
         phase_initial_rad = np.angle(initial_field)
