@@ -25,7 +25,7 @@ from MathAndPhysicsTools import (
     rad_to_nm,
     create_grid,
     load_data_from_file,
-    compute_pv_rms,  # Déplacée depuis Beam.py
+    compute_pv_rms,
     # Conversions d'unités
     J_to_mJ, mJ_to_J,
     W_to_mW, mW_to_W,
@@ -66,6 +66,7 @@ class Beam:
         grid_y (np.ndarray): Grille en y en mm.
         pulse_duration_s (float): Durée de l'impulsion en secondes (pour conversion énergie/puissance). Default: 1e-9.
         logger (logging.Logger): Logger local pour le débogage.
+        coherence (str): Régime de cohérence du faisceau ("coherent" ou "incoherent"). Default: "coherent".
     """
 
     def __init__(
@@ -82,6 +83,7 @@ class Beam:
         electric_field: Optional[np.ndarray] = None,
         pulse_duration_s: float = 1e-9,  # 1 ns par défaut
         num_points: int = 512,
+        coherence: str = "coherent",  # NOUVEAU
     ):
         """
         FR: Initialise un faisceau optique avec les paramètres par défaut.
@@ -105,14 +107,20 @@ class Beam:
             electric_field (np.ndarray, optional): Champ électrique complexe 2D.
             pulse_duration_s (float): Durée de l'impulsion en secondes (défaut: 1e-9).
             num_points (int): Nombre de points par dimension pour la grille (défaut: 512).
+            coherence (str): Régime de cohérence ("coherent" ou "incoherent"). Default: "coherent".
 
         Raises:
-            ValueError: Si les unités spécifiées sont invalides.
+            ValueError: Si les unités spécifiées sont invalides ou si la cohérence est invalide.
         """
+        # Validation de la cohérence
+        if coherence not in ["coherent", "incoherent"]:
+            raise ValueError(f"Régime de cohérence invalide : {coherence}. Utilisez 'coherent' ou 'incoherent'.")
+
         self.wavelength_nm = wavelength_nm
         self.diameter_mm = diameter_mm
         self.pulse_duration_s = pulse_duration_s
         self.num_points = num_points
+        self.coherence = coherence
         self.grid_x, self.grid_y = create_grid(diameter_mm, num_points)
 
         # Validation des unités
@@ -163,8 +171,9 @@ class Beam:
         energy_log = f"{self.energy} {self.energy_unit}" if self.energy_unit != "a.u." else f"{self.energy} (a.u.)"
         power_log = f", power={self.power} {self.power_unit}" if self.power is not None else ""
         self.logger.info(
-            "Beam initialized with wavelength=%.1f nm, diameter=%.1f mm, energy=%s%s, intensity_unit=%s, pulse_duration=%.2e s",
-            wavelength_nm, diameter_mm, energy_log, power_log, intensity_unit, pulse_duration_s
+            "Beam initialized with wavelength=%.1f nm, diameter=%.1f mm, energy=%s%s, intensity_unit=%s, "
+            "pulse_duration=%.2e s, coherence=%s",
+            wavelength_nm, diameter_mm, energy_log, power_log, intensity_unit, pulse_duration_s, coherence
         )
 
     # =========================================================================
@@ -255,6 +264,23 @@ class Beam:
             raise ValueError(f"Unité d'intensité invalide : {intensity_unit}. Utilisez 'W/m2', 'W/cm2', ou 'a.u.'.")
         self.intensity_unit = intensity_unit
         self.logger.info("Intensity unit set to %s", intensity_unit)
+
+    def set_coherence(self, coherence: str) -> None:
+        """
+        FR: Définit le régime de cohérence du faisceau.
+
+        EN: Sets the coherence regime of the beam.
+
+        Args:
+            coherence (str): Régime de cohérence ("coherent" ou "incoherent").
+
+        Raises:
+            ValueError: Si le régime est invalide.
+        """
+        if coherence not in ["coherent", "incoherent"]:
+            raise ValueError(f"Régime de cohérence invalide : {coherence}. Utilisez 'coherent' ou 'incoherent'.")
+        self.coherence = coherence
+        self.logger.info("Coherence set to %s", coherence)
 
     def get_energy_in_unit(self, target_unit: str = "J") -> float:
         """
@@ -368,6 +394,72 @@ class Beam:
             return intensity_W_m2 * get_area_mm2(self.diameter_mm) * 1e-6  # Conversion en a.u.
 
     # =========================================================================
+    # Méthodes d'extraction / Extraction Methods
+    # =========================================================================
+
+    def extract_phase_from_electric_field(
+        self,
+        electric_field: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """
+        FR: Extrait la carte de phase à partir d'un champ électrique complexe.
+            Si electric_field est None, utilise self.electric_field.
+
+        EN: Extracts the phase map from a complex electric field.
+            If electric_field is None, uses self.electric_field.
+
+        Args:
+            electric_field (np.ndarray, optional): Champ électrique complexe 2D.
+
+        Returns:
+            np.ndarray: Carte de phase 2D en nm.
+
+        Formula:
+            phase_rad = angle(electric_field)
+            phase_nm = phase_rad * wavelength_nm / (2π)
+        """
+        if electric_field is None:
+            if self.electric_field is None:
+                raise ValueError("Aucun champ électrique défini. Générez-le d'abord avec generate_electric_field().")
+            electric_field = self.electric_field
+
+        phase_rad = np.angle(electric_field)
+        phase_nm = rad_to_nm(phase_rad, self.wavelength_nm)
+        self.phase = phase_nm
+        return phase_nm
+
+    def compute_intensity_from_electric_field(
+        self,
+        electric_field: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """
+        FR: Calcule la carte d'intensité à partir d'un champ électrique complexe.
+            Si electric_field est None, utilise self.electric_field.
+
+        EN: Computes the intensity map from a complex electric field.
+            If electric_field is None, uses self.electric_field.
+
+        Args:
+            electric_field (np.ndarray, optional): Champ électrique complexe 2D.
+
+        Returns:
+            np.ndarray: Carte d'intensité 2D (module au carré du champ électrique).
+
+        Formula:
+            intensity = |electric_field|²
+        """
+        if electric_field is None:
+            if self.electric_field is None:
+                raise ValueError("Aucun champ électrique défini. Générez-le d'abord avec generate_electric_field().")
+            electric_field = self.electric_field
+
+        intensity = np.abs(electric_field) ** 2
+        # Normalisation selon l'énergie ou la puissance
+        intensity = self._normalize_intensity(intensity)
+        self.intensity = intensity
+        return intensity
+
+    # =========================================================================
     # Génération d'Intensité / Intensity Generation
     # =========================================================================
 
@@ -390,6 +482,7 @@ class Beam:
                 - "supergaussian": Intensité super-gaussienne.
                 - "tophat": Intensité top-hat (uniforme dans un cercle).
                 - "from_file": Import depuis un fichier (txt ou csv).
+                - "from_electric_field": Calcule l'intensité à partir du champ électrique.
             **kwargs: Arguments spécifiques à la méthode.
 
         Returns:
@@ -409,6 +502,8 @@ class Beam:
             return self._generate_tophat_intensity(**kwargs)
         elif method == "from_file":
             return self._load_intensity_from_file(**kwargs)
+        elif method == "from_electric_field":
+            return self.compute_intensity_from_electric_field(**kwargs)
         else:
             raise ValueError(f"Méthode inconnue pour l'intensité : {method}")
 
@@ -431,7 +526,7 @@ class Beam:
             power_W = energy_J / self.pulse_duration_s
             # Calculer l'intensité moyenne en W/m²
             intensity_W_m2 = power_to_intensity(power_W, "W", self.diameter_mm, "W/m2")
-            # Calculer la surface en pixels
+            # Calculer la surface en m²
             surface_m2 = get_area_mm2(self.diameter_mm) * 1e-6  # mm² → m²
             total_energy_J = intensity_W_m2 * surface_m2 * self.pulse_duration_s
             # Normaliser l'intensité pour que la somme = énergie_J
@@ -632,6 +727,7 @@ class Beam:
                 - "sum_zernike": Somme de modes de Zernike choisis.
                 - "sum_legendre": Somme de modes de Legendre choisis.
                 - "from_file": Import depuis un fichier (txt ou csv).
+                - "from_electric_field": Extrait la phase à partir du champ électrique.
             **kwargs: Arguments spécifiques à la méthode.
 
         Returns:
@@ -653,6 +749,8 @@ class Beam:
             return self._generate_sum_legendre_phase(**kwargs)
         elif method == "from_file":
             return self._load_phase_from_file(**kwargs)
+        elif method == "from_electric_field":
+            return self.extract_phase_from_electric_field(**kwargs)
         else:
             raise ValueError(f"Méthode inconnue pour la phase : {method}")
 
@@ -1310,6 +1408,35 @@ class TestBeam:
         surface_m2 = np.pi * (5e-3)**2
         expected_intensity = 1.0 / surface_m2
         self.assertAlmostEqual(intensity_W_m2, expected_intensity, places=5)
+
+    def test_extract_phase_from_electric_field(self):
+        electric_field = self.beam.generate_electric_field(method="gaussian")
+        phase = self.beam.extract_phase_from_electric_field(electric_field)
+        self.assertEqual(phase.shape, (128, 128))
+        self.assertEqual(phase.dtype, np.float64)
+
+    def test_compute_intensity_from_electric_field(self):
+        electric_field = self.beam.generate_electric_field(method="gaussian")
+        intensity = self.beam.compute_intensity_from_electric_field(electric_field)
+        self.assertEqual(intensity.shape, (128, 128))
+        self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
+
+    def test_generate_intensity_from_electric_field(self):
+        electric_field = self.beam.generate_electric_field(method="gaussian")
+        intensity = self.beam.generate_intensity(method="from_electric_field")
+        self.assertEqual(intensity.shape, (128, 128))
+        self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
+
+    def test_generate_phase_from_electric_field(self):
+        electric_field = self.beam.generate_electric_field(method="gaussian")
+        phase = self.beam.generate_phase(method="from_electric_field")
+        self.assertEqual(phase.shape, (128, 128))
+
+    def test_set_coherence(self):
+        self.beam.set_coherence("incoherent")
+        self.assertEqual(self.beam.coherence, "incoherent")
+        self.beam.set_coherence("coherent")
+        self.assertEqual(self.beam.coherence, "coherent")
 
 
 if __name__ == "__main__":
