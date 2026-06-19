@@ -1,10 +1,12 @@
 """
 Beam.py
 FR: Module pour la génération et la gestion des faisceaux optiques.
-    Permet la génération de faisceaux avec différentes méthodes d'intensité, de phase et de champ électrique.
+    Permet la génération de faisceaux avec différentes méthodes d'intensité, de phase et de champ électrique,
+    en supportant les unités d'énergie (J, mJ, a.u.), de puissance (W, mW, a.u.), et d'intensité (W/m², W/cm², a.u.).
 
 EN: Module for generating and managing optical beams.
-    Allows generation of beams with different intensity, phase, and electric field methods.
+    Allows generation of beams with different intensity, phase, and electric field methods,
+    supporting energy units (J, mJ, a.u.), power units (W, mW, a.u.), and intensity units (W/m², W/cm², a.u.).
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
@@ -24,24 +26,38 @@ from MathAndPhysicsTools import (
     create_grid,
     load_data_from_file,
     compute_pv_rms,
+    # Conversions d'unités
+    J_to_mJ, mJ_to_J,
+    W_to_mW, mW_to_W,
+    W_m2_to_W_cm2, W_cm2_to_W_m2,
+    energy_to_power, power_to_energy,
+    power_to_intensity, intensity_to_power,
+    get_area_mm2,
 )
 
 
 class Beam:
     """
     FR: Classe représentant un faisceau optique.
+        Supporte les unités d'énergie (J, mJ, a.u.), de puissance (W, mW, a.u.), et d'intensité (W/m², W/cm², a.u.).
 
     EN: Class representing an optical beam.
+        Supports energy units (J, mJ, a.u.), power units (W, mW, a.u.), and intensity units (W/m², W/cm², a.u.).
 
     Attributes:
         wavelength_nm (float): Longueur d'onde en nm (défaut: 633.0).
         diameter_mm (float): Diamètre du faisceau en mm (défaut: 10.0).
         energy (float): Énergie totale du faisceau (défaut: 1.0).
-        intensity (np.ndarray): Carte d'intensité 2D (en unités arbitraires).
+        energy_unit (str): Unité de l'énergie ("J", "mJ", ou "a.u."). Default: "a.u.".
+        power (float): Puissance du faisceau (si spécifiée).
+        power_unit (str): Unité de la puissance ("W", "mW", ou "a.u."). Default: "a.u.".
+        intensity (np.ndarray): Carte d'intensité 2D.
+        intensity_unit (str): Unité de l'intensité ("W/m2", "W/cm2", ou "a.u."). Default: "a.u.".
         phase (np.ndarray): Carte de phase 2D en nm.
         electric_field (np.ndarray): Champ électrique complexe 2D.
         grid_x (np.ndarray): Grille en x en mm.
         grid_y (np.ndarray): Grille en y en mm.
+        pulse_duration_s (float): Durée de l'impulsion en secondes (pour conversion énergie/puissance). Default: 1e-9.
         logger (logging.Logger): Logger local pour le débogage.
     """
 
@@ -50,33 +66,84 @@ class Beam:
         wavelength_nm: float = 633.0,
         diameter_mm: float = 10.0,
         energy: float = 1.0,
+        energy_unit: str = "a.u.",
+        power: Optional[float] = None,
+        power_unit: str = "a.u.",
         intensity: Optional[np.ndarray] = None,
+        intensity_unit: str = "a.u.",
         phase: Optional[np.ndarray] = None,
         electric_field: Optional[np.ndarray] = None,
+        pulse_duration_s: float = 1e-9,  # 1 ns par défaut
         num_points: int = 512,
     ):
         """
         FR: Initialise un faisceau optique avec les paramètres par défaut.
+            Si `energy` est spécifiée, elle est utilisée pour normaliser l'intensité.
+            Si `power` est spécifiée, elle est convertie en énergie en utilisant `pulse_duration_s`.
 
         EN: Initializes an optical beam with default parameters.
+            If `energy` is specified, it is used to normalize the intensity.
+            If `power` is specified, it is converted to energy using `pulse_duration_s`.
 
         Args:
             wavelength_nm (float): Longueur d'onde en nm (défaut: 633.0).
             diameter_mm (float): Diamètre du faisceau en mm (défaut: 10.0).
             energy (float): Énergie totale du faisceau (défaut: 1.0).
+            energy_unit (str): Unité de l'énergie ("J", "mJ", ou "a.u."). Default: "a.u.".
+            power (float, optional): Puissance du faisceau. Si spécifiée, remplace `energy`.
+            power_unit (str): Unité de la puissance ("W", "mW", ou "a.u."). Default: "a.u.".
             intensity (np.ndarray, optional): Carte d'intensité 2D.
+            intensity_unit (str): Unité de l'intensité ("W/m2", "W/cm2", ou "a.u."). Default: "a.u.".
             phase (np.ndarray, optional): Carte de phase 2D en nm.
             electric_field (np.ndarray, optional): Champ électrique complexe 2D.
+            pulse_duration_s (float): Durée de l'impulsion en secondes (défaut: 1e-9).
             num_points (int): Nombre de points par dimension pour la grille (défaut: 512).
+
+        Raises:
+            ValueError: Si les unités spécifiées sont invalides.
         """
         self.wavelength_nm = wavelength_nm
         self.diameter_mm = diameter_mm
-        self.energy = energy
+        self.pulse_duration_s = pulse_duration_s
+        self.num_points = num_points
+        self.grid_x, self.grid_y = create_grid(diameter_mm, num_points)
+
+        # Validation des unités
+        if energy_unit not in ["J", "mJ", "a.u."]:
+            raise ValueError(f"Unité d'énergie invalide : {energy_unit}. Utilisez 'J', 'mJ', ou 'a.u.'.")
+        if power_unit not in ["W", "mW", "a.u."]:
+            raise ValueError(f"Unité de puissance invalide : {power_unit}. Utilisez 'W', 'mW', ou 'a.u.'.")
+        if intensity_unit not in ["W/m2", "W/cm2", "a.u."]:
+            raise ValueError(f"Unité d'intensité invalide : {intensity_unit}. Utilisez 'W/m2', 'W/cm2', ou 'a.u.'.")
+
+        # Configuration des unités
+        self.energy_unit = energy_unit
+        self.power_unit = power_unit
+        self.intensity_unit = intensity_unit
+
+        # Si la puissance est spécifiée, convertir en énergie
+        if power is not None:
+            if power_unit != "a.u.":
+                # Convertir la puissance en énergie (J)
+                energy_J = power_to_energy(power, power_unit, pulse_duration_s, "J")
+                # Convertir en l'unité d'énergie souhaitée
+                if energy_unit == "J":
+                    self.energy = energy_J
+                elif energy_unit == "mJ":
+                    self.energy = J_to_mJ(energy_J)
+                else:  # a.u.
+                    self.energy = energy_J  # On garde en Joules pour la normalisation
+                self.power = power
+            else:
+                self.energy = energy
+                self.power = None
+        else:
+            self.energy = energy
+            self.power = None
+
         self.intensity = intensity
         self.phase = phase
         self.electric_field = electric_field
-        self.num_points = num_points
-        self.grid_x, self.grid_y = create_grid(diameter_mm, num_points)
 
         # Configuration du logger local
         self.logger = logging.getLogger("Beam")
@@ -84,10 +151,214 @@ class Beam:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         self.logger.addHandler(handler)
+
+        # Log des paramètres d'initialisation
+        energy_log = f"{self.energy} {self.energy_unit}" if self.energy_unit != "a.u." else f"{self.energy} (a.u.)"
+        power_log = f", power={self.power} {self.power_unit}" if self.power is not None else ""
         self.logger.info(
-            "Beam initialized with wavelength=%.1f nm, diameter=%.1f mm, energy=%.2f",
-            wavelength_nm, diameter_mm, energy
+            "Beam initialized with wavelength=%.1f nm, diameter=%.1f mm, energy=%s%s, intensity_unit=%s, pulse_duration=%.2e s",
+            wavelength_nm, diameter_mm, energy_log, power_log, intensity_unit, pulse_duration_s
         )
+
+    # =========================================================================
+    # Méthodes de conversion d'unités / Unit Conversion Methods
+    # =========================================================================
+
+    def set_energy(
+        self,
+        energy: float,
+        energy_unit: str = "a.u.",
+    ) -> None:
+        """
+        FR: Définit l'énergie du faisceau et convertit en unités internes.
+
+        EN: Sets the beam energy and converts to internal units.
+
+        Args:
+            energy (float): Énergie du faisceau.
+            energy_unit (str): Unité de l'énergie ("J", "mJ", ou "a.u."). Default: "a.u.".
+
+        Raises:
+            ValueError: Si l'unité est invalide.
+        """
+        if energy_unit not in ["J", "mJ", "a.u."]:
+            raise ValueError(f"Unité d'énergie invalide : {energy_unit}. Utilisez 'J', 'mJ', ou 'a.u.'.")
+
+        self.energy_unit = energy_unit
+        if energy_unit == "J":
+            self.energy = energy
+        elif energy_unit == "mJ":
+            self.energy = mJ_to_J(energy)
+        else:  # a.u.
+            self.energy = energy
+
+        self.logger.info("Energy set to %.4f %s", energy, energy_unit)
+
+    def set_power(
+        self,
+        power: float,
+        power_unit: str = "a.u.",
+    ) -> None:
+        """
+        FR: Définit la puissance du faisceau et convertit en énergie en utilisant pulse_duration_s.
+
+        EN: Sets the beam power and converts to energy using pulse_duration_s.
+
+        Args:
+            power (float): Puissance du faisceau.
+            power_unit (str): Unité de la puissance ("W", "mW", ou "a.u."). Default: "a.u.".
+
+        Raises:
+            ValueError: Si l'unité est invalide.
+        """
+        if power_unit not in ["W", "mW", "a.u."]:
+            raise ValueError(f"Unité de puissance invalide : {power_unit}. Utilisez 'W', 'mW', ou 'a.u.'.")
+
+        self.power_unit = power_unit
+        self.power = power
+
+        # Convertir la puissance en énergie
+        if power_unit != "a.u.":
+            energy_J = power_to_energy(power, power_unit, self.pulse_duration_s, "J")
+            if self.energy_unit == "J":
+                self.energy = energy_J
+            elif self.energy_unit == "mJ":
+                self.energy = J_to_mJ(energy_J)
+            else:  # a.u.
+                self.energy = energy_J
+        else:
+            self.energy = power  # Cas a.u., on suppose que c'est compatible
+
+        self.logger.info("Power set to %.4f %s, converted to energy %.4f %s",
+                         power, power_unit, self.energy, self.energy_unit)
+
+    def set_intensity_unit(self, intensity_unit: str) -> None:
+        """
+        FR: Définit l'unité d'intensité.
+
+        EN: Sets the intensity unit.
+
+        Args:
+            intensity_unit (str): Unité de l'intensité ("W/m2", "W/cm2", ou "a.u.").
+
+        Raises:
+            ValueError: Si l'unité est invalide.
+        """
+        if intensity_unit not in ["W/m2", "W/cm2", "a.u."]:
+            raise ValueError(f"Unité d'intensité invalide : {intensity_unit}. Utilisez 'W/m2', 'W/cm2', ou 'a.u.'.")
+        self.intensity_unit = intensity_unit
+        self.logger.info("Intensity unit set to %s", intensity_unit)
+
+    def get_energy_in_unit(self, target_unit: str = "J") -> float:
+        """
+        FR: Récupère l'énergie dans l'unité souhaitée.
+
+        EN: Gets the energy in the desired unit.
+
+        Args:
+            target_unit (str): Unité cible ("J", "mJ", ou "a.u."). Default: "J".
+
+        Returns:
+            float: Énergie dans l'unité cible.
+
+        Raises:
+            ValueError: Si l'unité cible est invalide.
+        """
+        if target_unit not in ["J", "mJ", "a.u."]:
+            raise ValueError(f"Unité cible invalide : {target_unit}. Utilisez 'J', 'mJ', ou 'a.u.'.")
+
+        if self.energy_unit == "J":
+            energy_J = self.energy
+        elif self.energy_unit == "mJ":
+            energy_J = mJ_to_J(self.energy)
+        else:  # a.u.
+            energy_J = self.energy  # On suppose que a.u. = J pour la conversion
+
+        if target_unit == "J":
+            return energy_J
+        elif target_unit == "mJ":
+            return J_to_mJ(energy_J)
+        else:  # a.u.
+            return self.energy
+
+    def get_power_in_unit(self, target_unit: str = "W") -> float:
+        """
+        FR: Récupère la puissance dans l'unité souhaitée.
+
+        EN: Gets the power in the desired unit.
+
+        Args:
+            target_unit (str): Unité cible ("W", "mW", ou "a.u."). Default: "W".
+
+        Returns:
+            float: Puissance dans l'unité cible.
+
+        Raises:
+            ValueError: Si l'unité cible est invalide ou si la puissance n'est pas définie.
+        """
+        if self.power is None:
+            # Calculer la puissance à partir de l'énergie
+            energy_J = self.get_energy_in_unit("J")
+            power_W = energy_J / self.pulse_duration_s
+            if target_unit == "W":
+                return power_W
+            elif target_unit == "mW":
+                return W_to_mW(power_W)
+            elif target_unit == "a.u.":
+                return power_W
+            else:
+                raise ValueError(f"Unité cible invalide : {target_unit}. Utilisez 'W', 'mW', ou 'a.u.'.")
+        else:
+            if self.power_unit == "W":
+                power_W = self.power
+            elif self.power_unit == "mW":
+                power_W = mW_to_W(self.power)
+            else:  # a.u.
+                power_W = self.power
+
+            if target_unit == "W":
+                return power_W
+            elif target_unit == "mW":
+                return W_to_mW(power_W)
+            else:  # a.u.
+                return self.power
+
+    def get_intensity_in_unit(self, target_unit: str = "W/m2") -> float:
+        """
+        FR: Récupère l'intensité moyenne dans l'unité souhaitée.
+
+        EN: Gets the average intensity in the desired unit.
+
+        Args:
+            target_unit (str): Unité cible ("W/m2", "W/cm2", ou "a.u."). Default: "W/m2".
+
+        Returns:
+            float: Intensité moyenne dans l'unité cible.
+
+        Raises:
+            ValueError: Si l'unité cible est invalide ou si l'intensité n'est pas définie.
+        """
+        if self.intensity is None:
+            raise ValueError("L'intensité n'est pas définie. Générez-la d'abord avec generate_intensity().")
+
+        if self.intensity_unit == "a.u.":
+            # Si l'intensité est en a.u., on la convertit à partir de l'énergie
+            energy_J = self.get_energy_in_unit("J")
+            power_W = energy_J / self.pulse_duration_s
+            intensity_W_m2 = power_to_intensity(power_W, "W", self.diameter_mm, "W/m2")
+        elif self.intensity_unit == "W/m2":
+            intensity_W_m2 = np.mean(self.intensity)
+        elif self.intensity_unit == "W/cm2":
+            intensity_W_m2 = W_cm2_to_W_m2(np.mean(self.intensity))
+        else:
+            raise ValueError(f"Unité d'intensité actuelle invalide : {self.intensity_unit}.")
+
+        if target_unit == "W/m2":
+            return intensity_W_m2
+        elif target_unit == "W/cm2":
+            return W_m2_to_W_cm2(intensity_W_m2)
+        else:  # a.u.
+            return intensity_W_m2 * get_area_mm2(self.diameter_mm) * 1e-6  # Conversion en a.u.
 
     # =========================================================================
     # Génération d'Intensité / Intensity Generation
@@ -100,8 +371,10 @@ class Beam:
     ) -> np.ndarray:
         """
         FR: Génère une carte d'intensité selon la méthode spécifiée.
+            L'intensité est normalisée selon l'énergie ou la puissance spécifiée.
 
         EN: Generates an intensity map according to the specified method.
+            The intensity is normalized according to the specified energy or power.
 
         Args:
             method (str): Méthode de génération. Options:
@@ -132,6 +405,39 @@ class Beam:
         else:
             raise ValueError(f"Méthode inconnue pour l'intensité : {method}")
 
+    def _normalize_intensity(self, intensity: np.ndarray) -> np.ndarray:
+        """
+        FR: Normalise l'intensité selon l'énergie ou la puissance.
+
+        EN: Normalizes the intensity according to energy or power.
+
+        Args:
+            intensity (np.ndarray): Carte d'intensité non normalisée.
+
+        Returns:
+            np.ndarray: Carte d'intensité normalisée.
+        """
+        if self.energy_unit != "a.u." or self.power_unit != "a.u.":
+            # Convertir l'énergie en Joules
+            energy_J = self.get_energy_in_unit("J")
+            # Calculer la puissance en Watts
+            power_W = energy_J / self.pulse_duration_s
+            # Calculer l'intensité moyenne en W/m²
+            intensity_W_m2 = power_to_intensity(power_W, "W", self.diameter_mm, "W/m2")
+            # Calculer la surface en pixels
+            area_px = np.pi * (self.diameter_mm / 2)**2  # Approximation de la surface en mm²
+            # Normaliser l'intensité pour que la somme corresponde à l'énergie
+            # Intensité (W/m²) * surface (m²) * durée (s) = énergie (J)
+            surface_m2 = get_area_mm2(self.diameter_mm) * 1e-6  # mm² → m²
+            total_energy_J = intensity_W_m2 * surface_m2 * self.pulse_duration_s
+            # Normaliser l'intensité pour que la somme = énergie_J
+            intensity = intensity / np.sum(intensity) * (total_energy_J / (surface_m2 * self.pulse_duration_s))
+        else:
+            # Normalisation classique par l'énergie (a.u.)
+            intensity = intensity / np.sum(intensity) * self.energy
+
+        return intensity
+
     def _generate_random_intensity(
         self,
         min_amplitude: float = 0.1,
@@ -153,7 +459,7 @@ class Beam:
             max_frequency (float): Fréquence spatiale maximale en 1/mm (défaut: 0.1).
 
         Returns:
-            np.ndarray: Carte d'intensité 2D normalisée par l'énergie.
+            np.ndarray: Carte d'intensité 2D normalisée.
         """
         # Génération d'un spectre de Fourier aléatoire
         shape = (self.num_points, self.num_points)
@@ -180,8 +486,8 @@ class Beam:
         # Transformée de Fourier inverse pour obtenir l'intensité
         intensity = np.abs(np.fft.ifft2(spectrum))**2
 
-        # Normalisation par l'énergie
-        intensity = intensity / np.sum(intensity) * self.energy
+        # Normalisation
+        intensity = self._normalize_intensity(intensity)
         self.intensity = intensity
         return intensity
 
@@ -198,13 +504,13 @@ class Beam:
             sigma_mm (float): Écart-type de la gaussienne en mm (défaut: 2.0).
 
         Returns:
-            np.ndarray: Carte d'intensité 2D normalisée par l'énergie.
+            np.ndarray: Carte d'intensité 2D normalisée.
 
         Formula:
             I(x,y) = exp(-(x² + y²) / (2σ²))
         """
         intensity = np.exp(-(self.grid_x**2 + self.grid_y**2) / (2 * sigma_mm**2))
-        intensity = intensity / np.sum(intensity) * self.energy
+        intensity = self._normalize_intensity(intensity)
         self.intensity = intensity
         return intensity
 
@@ -223,13 +529,13 @@ class Beam:
             n (int): Ordre de la super-gaussienne (défaut: 4).
 
         Returns:
-            np.ndarray: Carte d'intensité 2D normalisée par l'énergie.
+            np.ndarray: Carte d'intensité 2D normalisée.
 
         Formula:
             I(x,y) = exp(-(x² + y²)^n / (2σ²))
         """
         intensity = np.exp(-((self.grid_x**2 + self.grid_y**2) ** n) / (2 * sigma_mm**2))
-        intensity = intensity / np.sum(intensity) * self.energy
+        intensity = self._normalize_intensity(intensity)
         self.intensity = intensity
         return intensity
 
@@ -246,12 +552,12 @@ class Beam:
             radius_mm (float, optional): Rayon du cercle en mm. Si None, utilise la moitié du diamètre du faisceau.
 
         Returns:
-            np.ndarray: Carte d'intensité 2D normalisée par l'énergie.
+            np.ndarray: Carte d'intensité 2D normalisée.
         """
         radius_mm = radius_mm if radius_mm is not None else self.diameter_mm / 2
         r = np.sqrt(self.grid_x**2 + self.grid_y**2)
         intensity = np.where(r <= radius_mm, 1.0, 0.0)
-        intensity = intensity / np.sum(intensity) * self.energy
+        intensity = self._normalize_intensity(intensity)
         self.intensity = intensity
         return intensity
 
@@ -272,7 +578,7 @@ class Beam:
             delimiter (str, optional): Délimiteur pour les fichiers txt/csv. Default: None.
 
         Returns:
-            np.ndarray: Carte d'intensité 2D normalisée par l'énergie.
+            np.ndarray: Carte d'intensité 2D normalisée.
         """
         data = load_data_from_file(file_path, delimiter)
         if data.shape != (self.num_points, self.num_points):
@@ -295,8 +601,8 @@ class Beam:
         else:
             intensity = data
 
-        # Normalisation par l'énergie
-        intensity = intensity / np.sum(intensity) * self.energy
+        # Normalisation
+        intensity = self._normalize_intensity(intensity)
         self.intensity = intensity
         return intensity
 
@@ -820,7 +1126,10 @@ class Beam:
             if self.intensity is None:
                 self.intensity = self.generate_intensity()
             data = self.intensity
-            label = "Intensity (a.u.)"
+            if self.intensity_unit != "a.u.":
+                label = f"Intensity ({self.intensity_unit})"
+            else:
+                label = "Intensity (a.u.)"
             title = "Intensity Map"
         elif what == "phase":
             if self.phase is None:
@@ -871,12 +1180,14 @@ class TestBeam:
             wavelength_nm=633.0,
             diameter_mm=10.0,
             energy=1.0,
+            energy_unit="a.u.",
             num_points=128,  # Réduit pour les tests
         )
 
     def test_generate_gaussian_intensity(self):
         intensity = self.beam.generate_intensity(method="gaussian", sigma_mm=2.0)
         self.assertEqual(intensity.shape, (128, 128))
+        # Vérifier que la somme est proche de l'énergie (en a.u.)
         self.assertAlmostEqual(np.sum(intensity), self.beam.energy, places=5)
 
     def test_generate_tophat_intensity(self):
@@ -941,6 +1252,65 @@ class TestBeam:
         pv, rms = self.beam.compute_pv_rms(data)
         self.assertAlmostEqual(pv, np.max(data) - np.min(data), places=5)
         self.assertAlmostEqual(rms, np.sqrt(np.mean(data**2)), places=5)
+
+    def test_set_energy_J(self):
+        self.beam.set_energy(0.001, "J")
+        self.assertEqual(self.beam.energy_unit, "J")
+        self.assertAlmostEqual(self.beam.energy, 0.001, places=10)
+
+    def test_set_energy_mJ(self):
+        self.beam.set_energy(1.0, "mJ")
+        self.assertEqual(self.beam.energy_unit, "mJ")
+        self.assertAlmostEqual(self.beam.energy, 1.0, places=10)
+
+    def test_set_power_W(self):
+        self.beam.set_power(1.0, "W")
+        self.assertEqual(self.beam.power_unit, "W")
+        self.assertAlmostEqual(self.beam.power, 1.0, places=10)
+
+    def test_get_energy_in_unit(self):
+        self.beam.set_energy(1.0, "mJ")
+        energy_J = self.beam.get_energy_in_unit("J")
+        self.assertAlmostEqual(energy_J, 0.001, places=10)
+
+    def test_get_power_in_unit(self):
+        self.beam.set_energy(1.0, "mJ")
+        power_W = self.beam.get_power_in_unit("W")
+        expected = 1.0 / 1e-9  # 1 mJ / 1 ns = 1e9 W
+        self.assertAlmostEqual(power_W, expected, places=5)
+
+    def test_set_intensity_unit(self):
+        self.beam.set_intensity_unit("W/m2")
+        self.assertEqual(self.beam.intensity_unit, "W/m2")
+
+    def test_energy_to_power_conversion(self):
+        # Créer un faisceau avec puissance en W
+        beam = Beam(
+            wavelength_nm=633.0,
+            diameter_mm=10.0,
+            power=1.0,
+            power_unit="W",
+            pulse_duration_s=1e-3,  # 1 ms
+            num_points=128,
+        )
+        # Vérifier que l'énergie est bien calculée
+        energy_J = beam.get_energy_in_unit("J")
+        expected_energy_J = 1.0 * 1e-3  # 1 W * 1 ms = 0.001 J
+        self.assertAlmostEqual(energy_J, expected_energy_J, places=10)
+
+    def test_power_to_intensity_conversion(self):
+        beam = Beam(
+            wavelength_nm=633.0,
+            diameter_mm=10.0,
+            power=1.0,
+            power_unit="W",
+            num_points=128,
+        )
+        intensity_W_m2 = beam.get_intensity_in_unit("W/m2")
+        # Surface = π * (5e-3 m)^2 = π * 25e-6 m²
+        surface_m2 = np.pi * (5e-3)**2
+        expected_intensity = 1.0 / surface_m2
+        self.assertAlmostEqual(intensity_W_m2, expected_intensity, places=5)
 
 
 if __name__ == "__main__":
