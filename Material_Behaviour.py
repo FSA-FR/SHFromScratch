@@ -6,9 +6,10 @@ FR: Module pour la gestion du comportement des matériaux optiques et mécanique
     - La dilatation/contraction thermique des matériaux.
     - La réflectance et la transmittance en fonction de la longueur d'onde, de l'épaisseur et de la polarisation.
     - La variation de puissance optique pour les optiques réfractives.
+    - La déformation des microstructures (matrices de microlentilles, etc.).
     
     Matériaux optiques principaux : Fused_Silica, BK7, SF5, Silicium.
-    Matériaux mécaniques : Acier, Aluminium.
+    Matériaux mécaniques : Acier, Aluminium, Invar, Cuivre.
 
 EN: Module for managing the behavior of optical and mechanical materials.
     Allows calculating:
@@ -16,9 +17,10 @@ EN: Module for managing the behavior of optical and mechanical materials.
     - Thermal expansion/contraction of materials.
     - Reflectance and transmittance as a function of wavelength, thickness, and polarization.
     - Optical power variation for refractive optics.
+    - Deformation of microstructures (microlens arrays, etc.).
     
     Main optical materials: Fused_Silica, BK7, SF5, Silicon.
-    Mechanical materials: Steel, Aluminum.
+    Mechanical materials: Steel, Aluminum, Invar, Copper.
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
@@ -60,6 +62,13 @@ class Polarization(Enum):
     P = "p"           # Polarisation p (parallèle au plan d'incidence)
     CIRCULAR = "circular"  # Polarisation circulaire
     ELLIPTICAL = "elliptical"  # Polarisation elliptique
+
+
+class MicrostructureType(Enum):
+    """FR: Type de microstructure."""
+    MICROLENS_ARRAY = "microlens_array"
+    MICROPRISM_ARRAY = "microprism_array"
+    MICROHOLE_ARRAY = "microhole_array"
 
 
 # Constantes physiques
@@ -569,6 +578,8 @@ class MaterialBehaviour:
             # Matériau mécanique
             self.material_type = MaterialType.MECHANICAL
             self.optical_properties = None
+            self.refractive_index_model = None
+            self.dn_dT_model = None
             
             # Charger le modèle d'expansion thermique
             thermal_expansion_data = THERMAL_EXPANSION_DATA.get(self.material_name, {})
@@ -617,7 +628,7 @@ class MaterialBehaviour:
         Raises:
             ValueError: Si le matériau n'a pas de modèle d'indice de réfraction.
         """
-        if self.optical_properties is None:
+        if self.refractive_index_model is None:
             raise ValueError(f"Le matériau {self.material_name} n'a pas de propriétés optiques.")
         
         if model is None:
@@ -733,7 +744,7 @@ class MaterialBehaviour:
         
         # Calculer n
         n = np.zeros_like(wavelength_um) if isinstance(wavelength_um, np.ndarray) else 0.0
-        for i, key in enumerate(sorted(coeffs.keys(), key=lambda x: int(x[1:]))):
+        for i, key in enumerate(sorted(coeffs.keys(), key=lambda x: int(x[1:]) if x != "a0" else -1)):
             power = int(key[1:]) if key != "a0" else 0
             n += coeffs[key] * (wavelength_um ** power)
         
@@ -994,7 +1005,6 @@ class MaterialBehaviour:
         R = self.get_reflectance(wavelength_nm, angle_deg, polarization, n_medium)
         
         # Calculer le coefficient d'absorption à la longueur d'onde donnée
-        # (On utilise une interpolation linéaire pour l'instant)
         alpha = self._get_absorption_coefficient(wavelength_nm)
         
         # Convertir l'épaisseur en mètres
@@ -1119,6 +1129,254 @@ class MaterialBehaviour:
         delta_f_rel = -delta_power_rel
         
         return focal_length_mm * delta_f_rel
+
+    # =========================================================================
+    # Méthodes pour les microstructures / Microstructure Methods
+    # =========================================================================
+
+    def get_position_shift(
+        self,
+        initial_position_mm: float,
+        temperature_K: float,
+        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
+        is_relative_to_support: bool = False,
+        support_material_name: Optional[str] = None,
+    ) -> float:
+        """
+        FR: Calcule le décalage de position d'un élément optique ou mécanique dû à la dilatation thermique.
+            Si l'élément est fixé sur un support, le décalage dépend aussi de la dilatation du support.
+
+        EN: Calculates the position shift of an optical or mechanical element due to thermal expansion.
+            If the element is fixed on a support, the shift also depends on the support's expansion.
+
+        Args:
+            initial_position_mm (float): Position initiale en mm.
+            temperature_K (float): Température en Kelvin.
+            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
+            is_relative_to_support (bool): Si True, l'élément est fixé sur un support (défaut: False).
+            support_material_name (str, optional): Nom du matériau du support (défaut: None).
+
+        Returns:
+            float: Décalage de position en mm (Δx).
+        """
+        if is_relative_to_support and support_material_name is not None:
+            # L'élément se déplace avec le support
+            support_material = MaterialBehaviour(support_material_name)
+            delta_position = support_material.get_thermal_dilation(
+                initial_position_mm * 1e-3, temperature_K, reference_temperature_K
+            ) * 1e3  # Convertir en mm
+        else:
+            # L'élément se dilate indépendamment
+            delta_position = self.get_thermal_dilation(
+                initial_position_mm * 1e-3, temperature_K, reference_temperature_K
+            ) * 1e3  # Convertir en mm
+        
+        return delta_position
+
+    def get_microstructure_deformation(
+        self,
+        microstructure_type: MicrostructureType,
+        pitch_mm: float,
+        num_elements: int,
+        temperature_K: float,
+        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
+        support_material_name: Optional[str] = None,
+    ) -> Dict[str, Union[float, np.ndarray]]:
+        """
+        FR: Calcule la déformation d'une microstructure (matrice de microlentilles, etc.) due à la dilatation thermique.
+            Retourne les nouvelles positions des éléments et la variation du pas (pitch).
+
+        EN: Calculates the deformation of a microstructure (microlens array, etc.) due to thermal expansion.
+            Returns the new positions of the elements and the variation of the pitch.
+
+        Args:
+            microstructure_type (MicrostructureType): Type de microstructure.
+            pitch_mm (float): Pas initial entre les éléments en mm.
+            num_elements (int): Nombre d'éléments dans la microstructure.
+            temperature_K (float): Température en Kelvin.
+            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
+            support_material_name (str, optional): Nom du matériau du support (défaut: None).
+
+        Returns:
+            Dict[str, Union[float, np.ndarray]]: Dictionnaire contenant :
+                - "initial_positions_mm": Positions initiales des éléments (np.ndarray).
+                - "new_positions_mm": Nouvelles positions après dilatation (np.ndarray).
+                - "initial_pitch_mm": Pas initial (float).
+                - "new_pitch_mm": Nouveau pas après dilatation (float).
+                - "delta_pitch_mm": Variation du pas (float).
+                - "max_displacement_mm": Déplacement maximal (float).
+        """
+        # Calculer le décalage du pas
+        delta_pitch = self.get_thermal_dilation(pitch_mm * 1e-3, temperature_K, reference_temperature_K) * 1e3
+        new_pitch = pitch_mm + delta_pitch
+        
+        # Calculer les positions initiales (centrées)
+        if num_elements % 2 == 1:
+            # Nombre impair d'éléments : centré sur 0
+            initial_positions = np.linspace(-(num_elements - 1) * pitch_mm / 2, 
+                                           (num_elements - 1) * pitch_mm / 2, 
+                                           num_elements)
+        else:
+            # Nombre pair d'éléments : centré entre -pitch/2 et +pitch/2
+            initial_positions = np.linspace(-(num_elements - 1) * pitch_mm / 2, 
+                                           (num_elements - 1) * pitch_mm / 2, 
+                                           num_elements)
+        
+        # Calculer les nouvelles positions
+        if support_material_name is not None:
+            # La microstructure est fixée sur un support
+            support_material = MaterialBehaviour(support_material_name)
+            # Chaque élément se déplace avec le support
+            new_positions = initial_positions + support_material.get_thermal_dilation(
+                initial_positions * 1e-3, temperature_K, reference_temperature_K
+            ) * 1e3
+            # Le pas change aussi
+            new_pitch = pitch_mm + support_material.get_thermal_dilation(
+                pitch_mm * 1e-3, temperature_K, reference_temperature_K
+            ) * 1e3
+            delta_pitch = new_pitch - pitch_mm
+        else:
+            # La microstructure se dilate uniformément
+            scale_factor = 1.0 + self.get_thermal_expansion(temperature_K, reference_temperature_K)
+            new_positions = initial_positions * scale_factor
+            new_pitch = pitch_mm * scale_factor
+            delta_pitch = new_pitch - pitch_mm
+        
+        # Calculer le déplacement maximal
+        max_displacement = float(np.max(np.abs(new_positions - initial_positions)))
+        
+        return {
+            "initial_positions_mm": initial_positions,
+            "new_positions_mm": new_positions,
+            "initial_pitch_mm": pitch_mm,
+            "new_pitch_mm": new_pitch,
+            "delta_pitch_mm": delta_pitch,
+            "max_displacement_mm": max_displacement,
+        }
+
+    def get_optical_system_deformation(
+        self,
+        elements: List[Dict[str, Union[str, float]]],
+        temperature_K: float,
+        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
+        support_material_name: Optional[str] = None,
+    ) -> List[Dict[str, Union[str, float]]]:
+        """
+        FR: Calcule la déformation d'un système optique complet (lentilles, miroirs, etc.) due à la dilatation thermique.
+            Chaque élément peut avoir un matériau différent et une position initiale.
+
+        EN: Calculates the deformation of a complete optical system (lenses, mirrors, etc.) due to thermal expansion.
+            Each element can have a different material and initial position.
+
+        Args:
+            elements (List[Dict]): Liste des éléments du système optique. Chaque élément est un dictionnaire avec :
+                - "name" (str): Nom de l'élément.
+                - "material" (str): Nom du matériau.
+                - "position_mm" (float): Position initiale en mm.
+                - "focal_length_mm" (float, optional): Distance focale (pour les lentilles).
+                - "thickness_mm" (float, optional): Épaisseur en mm.
+                - "diameter_mm" (float, optional): Diamètre en mm.
+            temperature_K (float): Température en Kelvin.
+            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
+            support_material_name (str, optional): Nom du matériau du support (défaut: None).
+
+        Returns:
+            List[Dict]: Liste des éléments avec leurs nouvelles propriétés après dilatation.
+                Chaque élément contient :
+                - "name": Nom de l'élément.
+                - "material": Nom du matériau.
+                - "initial_position_mm": Position initiale en mm.
+                - "new_position_mm": Nouvelle position en mm.
+                - "delta_position_mm": Décalage de position en mm.
+                - "initial_focal_length_mm": Distance focale initiale en mm (si applicable).
+                - "new_focal_length_mm": Nouvelle distance focale en mm (si applicable).
+                - "delta_focal_length_mm": Variation de la distance focale en mm (si applicable).
+                - "initial_diameter_mm": Diamètre initial en mm (si applicable).
+                - "new_diameter_mm": Nouveau diamètre en mm (si applicable).
+                - "delta_diameter_mm": Variation du diamètre en mm (si applicable).
+        """
+        deformed_elements = []
+        
+        for element in elements:
+            element_name = element.get("name", "Unknown")
+            material_name = element.get("material", "Fused_Silica")
+            initial_position_mm = element.get("position_mm", 0.0)
+            initial_focal_length_mm = element.get("focal_length_mm")
+            initial_diameter_mm = element.get("diameter_mm")
+            initial_thickness_mm = element.get("thickness_mm")
+            
+            # Créer l'objet MaterialBehaviour pour cet élément
+            material = MaterialBehaviour(material_name)
+            
+            # Calculer le décalage de position
+            if support_material_name is not None:
+                # L'élément est fixé sur un support
+                support_material = MaterialBehaviour(support_material_name)
+                delta_position_mm = support_material.get_thermal_dilation(
+                    initial_position_mm * 1e-3, temperature_K, reference_temperature_K
+                ) * 1e3
+            else:
+                # L'élément se dilate indépendamment
+                delta_position_mm = material.get_thermal_dilation(
+                    initial_position_mm * 1e-3, temperature_K, reference_temperature_K
+                ) * 1e3
+            
+            new_position_mm = initial_position_mm + delta_position_mm
+            
+            # Calculer la nouvelle distance focale (si applicable)
+            new_focal_length_mm = None
+            delta_focal_length_mm = None
+            if initial_focal_length_mm is not None:
+                delta_focal_length_mm = material.get_focal_length_variation(
+                    initial_focal_length_mm, temperature_K, reference_temperature_K
+                )
+                new_focal_length_mm = initial_focal_length_mm + delta_focal_length_mm
+            
+            # Calculer le nouveau diamètre (si applicable)
+            new_diameter_mm = None
+            delta_diameter_mm = None
+            if initial_diameter_mm is not None:
+                delta_diameter_mm = material.get_thermal_dilation(
+                    initial_diameter_mm * 1e-3, temperature_K, reference_temperature_K
+                ) * 1e3
+                new_diameter_mm = initial_diameter_mm + delta_diameter_mm
+            
+            # Calculer la nouvelle épaisseur (si applicable)
+            new_thickness_mm = None
+            delta_thickness_mm = None
+            if initial_thickness_mm is not None:
+                delta_thickness_mm = material.get_thermal_dilation(
+                    initial_thickness_mm * 1e-3, temperature_K, reference_temperature_K
+                ) * 1e3
+                new_thickness_mm = initial_thickness_mm + delta_thickness_mm
+            
+            # Ajouter l'élément déformé à la liste
+            deformed_element = {
+                "name": element_name,
+                "material": material_name,
+                "initial_position_mm": initial_position_mm,
+                "new_position_mm": new_position_mm,
+                "delta_position_mm": delta_position_mm,
+            }
+            
+            if initial_focal_length_mm is not None:
+                deformed_element["initial_focal_length_mm"] = initial_focal_length_mm
+                deformed_element["new_focal_length_mm"] = new_focal_length_mm
+                deformed_element["delta_focal_length_mm"] = delta_focal_length_mm
+            
+            if initial_diameter_mm is not None:
+                deformed_element["initial_diameter_mm"] = initial_diameter_mm
+                deformed_element["new_diameter_mm"] = new_diameter_mm
+                deformed_element["delta_diameter_mm"] = delta_diameter_mm
+            
+            if initial_thickness_mm is not None:
+                deformed_element["initial_thickness_mm"] = initial_thickness_mm
+                deformed_element["new_thickness_mm"] = new_thickness_mm
+                deformed_element["delta_thickness_mm"] = delta_thickness_mm
+            
+            deformed_elements.append(deformed_element)
+        
+        return deformed_elements
 
     # =========================================================================
     # Méthodes utilitaires / Utility Methods
@@ -1395,6 +1653,44 @@ class TestMaterialBehaviour:
         self.assertIn("BK7", materials)
         self.assertIn("Silicon", materials)
         self.assertIn("Steel", materials)
+
+    def test_microstructure_deformation(self):
+        """Test la déformation d'une microstructure."""
+        material = MaterialBehaviour("Fused_Silica")
+        deformation = material.get_microstructure_deformation(
+            microstructure_type=MicrostructureType.MICROLENS_ARRAY,
+            pitch_mm=0.5,
+            num_elements=5,
+            temperature_K=373.15,  # 100°C
+            reference_temperature_K=293.15  # 20°C
+        )
+        
+        self.assertEqual(len(deformation["initial_positions_mm"]), 5)
+        self.assertEqual(len(deformation["new_positions_mm"]), 5)
+        self.assertGreater(deformation["delta_pitch_mm"], 0)
+        self.assertGreater(deformation["max_displacement_mm"], 0)
+
+    def test_optical_system_deformation(self):
+        """Test la déformation d'un système optique."""
+        material = MaterialBehaviour("BK7")
+        
+        # Définir un système optique simple
+        optical_system = [
+            {"name": "Lentille 1", "material": "BK7", "position_mm": 0.0, "focal_length_mm": 50.0, "diameter_mm": 25.0},
+            {"name": "Lentille 2", "material": "Fused_Silica", "position_mm": 100.0, "focal_length_mm": 75.0, "diameter_mm": 30.0},
+        ]
+        
+        deformed_system = material.get_optical_system_deformation(
+            optical_system,
+            temperature_K=373.15,  # 100°C
+            reference_temperature_K=293.15  # 20°C
+        )
+        
+        self.assertEqual(len(deformed_system), 2)
+        for element in deformed_system:
+            self.assertIn("delta_position_mm", element)
+            self.assertIn("delta_focal_length_mm", element)
+            self.assertIn("delta_diameter_mm", element)
 
 
 if __name__ == "__main__":
