@@ -33,6 +33,7 @@ EXAMPLES = [
     "example_7_normalization_test.py",
     "example_8_material_behaviour.py",
     "example_9_microstructure_thermal_deformation.py",
+    "example_10_optics.py",
 ]
 
 # Couleurs pour l'affichage
