@@ -6,10 +6,10 @@ FR: Module pour le calcul des centroïdes et des pentes locales dans un système
     - Simuler un système Shack-Hartmann complet (microlentilles + caméra)
     - Calculer les positions des centroïdes (barycentre) de chaque tâche d'Airy
     - Estimer l'erreur sur le calcul des centroïdes
-    - En déduire les pentes locales de phase (dφ/dx, dφ/dy)
+    - En déduire les pentes locales de phase (dφ/dx, dφ/dy) en RADIANS
     - Afficher :
-        * Carte des spots (tâches d'Airy)
-        * Carte des centroïdes (marqués sur l'image)
+        * Carte des tâches d'Airy (spots)
+        * Carte des centroïdes (marqués sur l'image des spots)
         * Cartes des pentes locales (X et Y)
         * Cartes d'erreur sur les centroïdes et les pentes
 
@@ -25,21 +25,26 @@ FR: Module pour le calcul des centroïdes et des pentes locales dans un système
     - GAUSSIAN_FIT : Ajustement gaussien 2D (plus précis pour les tâches bruitées)
     - MOMENT_BASED : Basé sur les moments (robuste au bruit)
 
+    Formule des pentes :
+        slope_x = arctan(dx / focal_length)  [rad]
+        slope_y = arctan(dy / focal_length)  [rad]
+    où dx, dy sont les décalages du centroïde par rapport à la position de référence.
+
     Unités :
     - Longueurs : mm (positions), µm (microlentilles)
     - Longueur d'onde : nm
     - Phase : nm, rad, mrad
-    - Pentes : rad/mm, mrad/mm
+    - Pentes : RAD (radians) - PAS rad/mm !
 
 EN: Module for calculating centroids and local slopes in a Shack-Hartmann system.
     Allows:
     - Simulating a complete Shack-Hartmann system (microlens array + camera)
     - Calculating centroid positions (barycenter) of each Airy spot
     - Estimating error on centroid calculation
-    - Deducing local phase slopes (dφ/dx, dφ/dy)
+    - Deducing local phase slopes (dφ/dx, dφ/dy) in RADIANS
     - Displaying:
         * Spot map (Airy spots)
-        * Centroid map (marked on the image)
+        * Centroid map (marked on the spot image)
         * Local slope maps (X and Y)
         * Error maps (centroids and slopes)
 
@@ -55,11 +60,16 @@ EN: Module for calculating centroids and local slopes in a Shack-Hartmann system
     - GAUSSIAN_FIT: 2D Gaussian fitting (more accurate for noisy spots)
     - MOMENT_BASED: Moment-based (robust to noise)
 
+    Slope formula:
+        slope_x = arctan(dx / focal_length)  [rad]
+        slope_y = arctan(dy / focal_length)  [rad]
+    where dx, dy are the centroid shifts from the reference position.
+
     Units:
     - Lengths: mm (positions), µm (microlenses)
     - Wavelength: nm
     - Phase: nm, rad, mrad
-    - Slopes: rad/mm, mrad/mm
+    - Slopes: RAD (radians) - NOT rad/mm!
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
@@ -82,6 +92,7 @@ Sources:
       -> Original Shack-Hartmann design and centroid algorithms
     - "Adaptive Optics for Astronomical Telescopes" by J.W. Hardy (Oxford, 1998)
       -> Wavefront reconstruction from slopes (Ch. 5)
+      -> Slope formula: theta = arctan(dx/f) for Shack-Hartmann
     - "Centroiding algorithms for Shack-Hartmann sensors" by J.M. Winther & R. Seldin (2004)
       -> Comparison of centroiding methods and their performance
     - "The Southwell Geometry for Wavefront Sensing" by W.H. Southwell (1980)
@@ -197,22 +208,24 @@ class SlopeCalculationMethod(Enum):
     """
     FR: Méthode de calcul des pentes locales.
         
-        - FINITE_DIFFERENCE : Différence finie (méthode standard)
-            slope_x = (x_centroid - x_reference) / focal_length
-            slope_y = (y_centroid - y_reference) / focal_length
+        - FINITE_DIFFERENCE : Utilise arctan(dx/f) et arctan(dy/f) (méthode standard)
+            où dx, dy sont les décalages en mm et f est la distance focale en mm
+            Résultat: pentes en RADIANS
         - LEAST_SQUARES : Moindres carrés (pour les pentes globales)
         - SOUTHWELL : Méthode de Southwell (pour la reconstruction de phase)
     
     EN: Method for calculating local slopes.
         
-        - FINITE_DIFFERENCE: Finite difference (standard method)
-            slope_x = (x_centroid - x_reference) / focal_length
-            slope_y = (y_centroid - y_reference) / focal_length
+        - FINITE_DIFFERENCE: Uses arctan(dx/f) and arctan(dy/f) (standard method)
+            where dx, dy are shifts in mm and f is focal length in mm
+            Result: slopes in RADIANS
         - LEAST_SQUARES: Least squares (for global slopes)
         - SOUTHWELL: Southwell method (for phase reconstruction)
     
     Source:
         - "The Southwell Geometry for Wavefront Sensing" by Southwell (1980)
+        - "Adaptive Optics for Astronomical Telescopes" by Hardy (1998)
+          -> Slope formula: theta = arctan(dx/f) for Shack-Hartmann
     """
     FINITE_DIFFERENCE = "finite_difference"
     LEAST_SQUARES = "least_squares"
@@ -221,6 +234,8 @@ class SlopeCalculationMethod(Enum):
 # Constantes pour les conversions
 RAD_TO_MRAD = 1000.0  # Conversion rad → mrad
 MRAD_TO_RAD = 1.0 / RAD_TO_MRAD
+RAD_TO_DEG = 180.0 / np.pi  # Conversion rad → degrés
+DEG_TO_RAD = np.pi / 180.0
 
 
 # =============================================================================
@@ -234,7 +249,7 @@ class ShackHartmann:
         et de calculer :
         - Les positions des centroïdes (barycentre) de chaque tâche d'Airy
         - Les erreurs sur les centroïdes
-        - Les pentes locales de phase (dφ/dx, dφ/dy)
+        - Les pentes locales de phase (dφ/dx, dφ/dy) EN RADIANS
         - Les erreurs sur les pentes
         
         Le système fonctionne en 3 étapes :
@@ -243,13 +258,21 @@ class ShackHartmann:
         3. Échantillonner le faisceau avec la caméra pour obtenir les tâches d'Airy
         
         Ensuite, les centroïdes et les pentes sont calculés automatiquement.
+        
+        FORMULE DES PENTES (IMPORTANT) :
+            slope_x = arctan(dx / focal_length)  [RADIANS]
+            slope_y = arctan(dy / focal_length)  [RADIANS]
+        où:
+            - dx, dy : décalages du centroïde par rapport à la position de référence (en mm)
+            - focal_length : distance focale des microlentilles (en mm)
+            - Le résultat est en RADIANS (pas en rad/mm !)
     
     EN: Complete Shack-Hartmann system.
         Allows simulating a Shack-Hartmann system (microlens array + camera)
         and calculating:
         - Centroid positions (barycenter) of each Airy spot
         - Centroid errors
-        - Local phase slopes (dφ/dx, dφ/dy)
+        - Local phase slopes (dφ/dx, dφ/dy) IN RADIANS
         - Slope errors
         
         The system works in 3 steps:
@@ -258,6 +281,14 @@ class ShackHartmann:
         3. Sample the beam with the camera to get Airy spots
         
         Then, centroids and slopes are calculated automatically.
+        
+        SLOPE FORMULA (IMPORTANT):
+            slope_x = arctan(dx / focal_length)  [RADIANS]
+            slope_y = arctan(dy / focal_length)  [RADIANS]
+        where:
+            - dx, dy: centroid shifts from reference position (in mm)
+            - focal_length: focal length of microlenses (in mm)
+            - Result is in RADIANS (not rad/mm!)
     
     Attributes:
         name (str): Nom du système Shack-Hartmann.
@@ -275,13 +306,15 @@ class ShackHartmann:
         spot_image (np.ndarray): Image des tâches d'Airy (2D array).
         centroids (np.ndarray): Positions des centroïdes en pixels (Nx2 array: [x, y]).
         centroid_errors (np.ndarray): Erreurs sur les centroïdes en pixels (Nx2 array).
-        slopes_x (np.ndarray): Pentes locales en x (rad/mm, 2D array).
-        slopes_y (np.ndarray): Pentes locales en y (rad/mm, 2D array).
+        slopes_x (np.ndarray): Pentes locales en x (RADIANS, 2D array).
+        slopes_y (np.ndarray): Pentes locales en y (RADIANS, 2D array).
         slope_errors (np.ndarray): Erreurs sur les pentes (NxNx2 array: [x_error, y_error]).
     
     Sources:
         - "Principles of Adaptive Optics" by Tyson (1991)
         - "Shack-Hartmann wavefront sensor" by Platt & Shack (2001)
+        - "Adaptive Optics for Astronomical Telescopes" by Hardy (1998)
+          -> Slope formula: theta = arctan(dx/f) in RADIANS
     """
 
     def __init__(self,
@@ -398,7 +431,7 @@ class ShackHartmann:
             2. Propage le faisceau jusqu'au plan focal
             3. Échantillonne le faisceau avec la caméra
             4. Calcule les centroïdes des tâches d'Airy
-            5. Calcule les pentes locales de phase
+            5. Calcule les pentes locales de phase (EN RADIANS)
             
         EN: Simulates the passage of a beam through the Shack-Hartmann system.
             
@@ -407,7 +440,7 @@ class ShackHartmann:
             2. Propagate the beam to the focal plane
             3. Sample the beam with the camera
             4. Calculate centroids of Airy spots
-            5. Calculate local phase slopes
+            5. Calculate local phase slopes (IN RADIANS)
         
         Args:
             beam (Beam): Faisceau incident.
@@ -666,7 +699,7 @@ class ShackHartmann:
         FR: Calcule le centroïde par ajustement gaussien 2D.
             
             Modèle :
-                I(x,y) = I₀ + A * exp(-((x-x₀)²/(2σ_x²) + (y-y₀)²/(2σ_y²)))
+                I(x,y) = I₀ + A * exp(-((x-x₀)²/2σ_x² + (y-y₀)²/2σ_y²))
             
             où :
                 - I₀ : niveau de fond
@@ -682,7 +715,7 @@ class ShackHartmann:
         EN: Calculates the centroid by 2D Gaussian fitting.
             
             Model:
-                I(x,y) = I₀ + A * exp(-((x-x₀)²/(2σ_x²) + (y-y₀)²/(2σ_y²)))
+                I(x,y) = I₀ + A * exp(-((x-x₀)²/2σ_x² + (y-y₀)²/2σ_y²))
             
             where:
                 - I₀: background level
@@ -824,41 +857,43 @@ class ShackHartmann:
         """
         FR: Calcule les pentes locales de phase à partir des centroïdes.
             
-            Formule :
-                slope_x = (x_centroid - x_reference) / focal_length
-                slope_y = (y_centroid - y_reference) / focal_length
+            FORMULE (CORRIGÉE) :
+                slope_x = arctan(dx / focal_length)  [RADIANS]
+                slope_y = arctan(dy / focal_length)  [RADIANS]
             
             où :
-                - (x_centroid, y_centroid) : position du centroïde en pixels
-                - (x_reference, y_reference) : position de référence (centre de la sous-image)
-                - focal_length : distance focale des microlentilles en mm
-            
-            Les pentes sont en rad/mm.
+                - dx, dy : décalages du centroïde par rapport à la position de référence (en mm)
+                - focal_length : distance focale des microlentilles (en mm)
+                - Le résultat est en RADIANS (pas en rad/mm !)
             
             L'erreur sur les pentes est calculée par propagation de l'erreur :
-                error_slope_x = error_x_centroid / focal_length
-                error_slope_y = error_y_centroid / focal_length
-        
+                error_slope_x = |d(slope_x)/dx| * error_x_centroid
+                error_slope_y = |d(slope_y)/dy| * error_y_centroid
+            
+            où d(slope_x)/dx = 1 / (focal_length * (1 + (dx/focal_length)^2))
+            
         EN: Calculates local phase slopes from centroids.
             
-            Formula:
-                slope_x = (x_centroid - x_reference) / focal_length
-                slope_y = (y_centroid - y_reference) / focal_length
+            FORMULA (CORRECTED):
+                slope_x = arctan(dx / focal_length)  [RADIANS]
+                slope_y = arctan(dy / focal_length)  [RADIANS]
             
             where:
-                - (x_centroid, y_centroid): centroid position in pixels
-                - (x_reference, y_reference): reference position (center of sub-image)
-                - focal_length: focal length of microlenses in mm
-            
-            Slopes are in rad/mm.
+                - dx, dy: centroid shifts from reference position (in mm)
+                - focal_length: focal length of microlenses (in mm)
+                - Result is in RADIANS (not rad/mm!)
             
             Error on slopes is calculated by error propagation:
-                error_slope_x = error_x_centroid / focal_length
-                error_slope_y = error_y_centroid / focal_length
+                error_slope_x = |d(slope_x)/dx| * error_x_centroid
+                error_slope_y = |d(slope_y)/dy| * error_y_centroid
+            
+            where d(slope_x)/dx = 1 / (focal_length * (1 + (dx/focal_length)^2))
         
         Sources:
             - "Principles of Adaptive Optics" by Tyson (1991), Eq. 4.2
             - "The Southwell Geometry for Wavefront Sensing" by Southwell (1980)
+            - "Adaptive Optics for Astronomical Telescopes" by Hardy (1998)
+              -> Slope formula: theta = arctan(dx/f) in RADIANS
         """
         if self.centroids is None:
             raise ValueError("Centroids not calculated. Run calculate_centroids() first.")
@@ -898,26 +933,39 @@ class ShackHartmann:
                 dx_mm = (x_centroid_pixels - x_ref_pixels) * pixel_size_mm
                 dy_mm = (y_centroid_pixels - y_ref_pixels) * pixel_size_mm
 
-                # Calculer les pentes (en rad/mm)
-                self.slopes_x[j, i] = dx_mm / self.focal_length_mm
-                self.slopes_y[j, i] = dy_mm / self.focal_length_mm
+                # Calculer les pentes EN RADIANS (CORRECTION)
+                # theta = arctan(dx / f)
+                self.slopes_x[j, i] = np.arctan2(dx_mm, self.focal_length_mm)
+                self.slopes_y[j, i] = np.arctan2(dy_mm, self.focal_length_mm)
 
-                # Calculer les erreurs sur les pentes (en rad/mm)
-                self.slope_errors[j, i, 0] = (x_error_pixels * pixel_size_mm) / self.focal_length_mm
-                self.slope_errors[j, i, 1] = (y_error_pixels * pixel_size_mm) / self.focal_length_mm
+                # Calculer les erreurs sur les pentes EN RADIANS
+                # d(slope)/dx = 1 / (f * (1 + (dx/f)^2)) = f / (f^2 + dx^2)
+                # Mais pour la propagation d'erreur : error_slope = |d(slope)/dx| * error_x
+                # Pour arctan(dx/f) : d(slope)/dx = f / (f^2 + dx^2)
+                f_sq = self.focal_length_mm ** 2
+                
+                d_slope_x_dx = self.focal_length_mm / (f_sq + dx_mm**2)
+                d_slope_y_dy = self.focal_length_mm / (f_sq + dy_mm**2)
+                
+                # Erreur en mm
+                x_error_mm = x_error_pixels * pixel_size_mm
+                y_error_mm = y_error_pixels * pixel_size_mm
+                
+                self.slope_errors[j, i, 0] = np.abs(d_slope_x_dx) * x_error_mm
+                self.slope_errors[j, i, 1] = np.abs(d_slope_y_dy) * y_error_mm
 
-        logger.info(f"Pentes calculées: {num_spots_x}x{num_spots_y} valeurs")
+        logger.info(f"Pentes calculées (en RADIANS): {num_spots_x}x{num_spots_y} valeurs")
 
     def get_slope_maps(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        FR: Retourne les cartes de pentes locales (en rad/mm).
+        FR: Retourne les cartes de pentes locales (en RADIANS).
             
-        EN: Returns the local slope maps (in rad/mm).
+        EN: Returns the local slope maps (in RADIANS).
         
         Returns:
             Tuple[np.ndarray, np.ndarray]: (slopes_x, slopes_y)
-                - slopes_x: Carte des pentes en x (rad/mm)
-                - slopes_y: Carte des pentes en y (rad/mm)
+                - slopes_x: Carte des pentes en x (RADIANS)
+                - slopes_y: Carte des pentes en y (RADIANS)
         """
         if self.slopes_x is None or self.slopes_y is None:
             raise ValueError("Slopes not calculated. Run calculate_slopes() first.")
@@ -925,14 +973,14 @@ class ShackHartmann:
 
     def get_slope_error_maps(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        FR: Retourne les cartes d'erreur sur les pentes (en rad/mm).
+        FR: Retourne les cartes d'erreur sur les pentes (en RADIANS).
             
-        EN: Returns the slope error maps (in rad/mm).
+        EN: Returns the slope error maps (in RADIANS).
         
         Returns:
             Tuple[np.ndarray, np.ndarray]: (slope_errors_x, slope_errors_y)
-                - slope_errors_x: Carte des erreurs sur les pentes en x (rad/mm)
-                - slope_errors_y: Carte des erreurs sur les pentes en y (rad/mm)
+                - slope_errors_x: Carte des erreurs sur les pentes en x (RADIANS)
+                - slope_errors_y: Carte des erreurs sur les pentes en y (RADIANS)
         """
         if self.slope_errors is None:
             raise ValueError("Slope errors not calculated. Run calculate_slopes() first.")
@@ -959,7 +1007,7 @@ class ShackHartmann:
         if np.max(centroid_map) > 0:
             centroid_map = centroid_map / np.max(centroid_map)
 
-        # Marquer les centroïdes (en rouge/blanc)
+        # Marquer les centroïdes (en blanc)
         for centroid in self.centroids:
             x, y = int(round(centroid[0])), int(round(centroid[1]))
             if 0 <= x < centroid_map.shape[1] and 0 <= y < centroid_map.shape[0]:
@@ -996,9 +1044,9 @@ class ShackHartmann:
 
     def get_total_slope_error_map(self) -> np.ndarray:
         """
-        FR: Retourne une carte de l'erreur totale sur les pentes (en rad/mm).
+        FR: Retourne une carte de l'erreur totale sur les pentes (en RADIANS).
             
-        EN: Returns a map of total slope error (in rad/mm).
+        EN: Returns a map of total slope error (in RADIANS).
         
         Returns:
             np.ndarray: Carte de l'erreur totale (sqrt(error_x² + error_y²)).
@@ -1126,9 +1174,9 @@ class ShackHartmann:
                         show: bool = False,
                         cmap: str = "Jet") -> None:
         """
-        FR: Visualise les cartes de pentes locales (X et Y).
+        FR: Visualise les cartes de pentes locales (X et Y) EN RADIANS.
             
-        EN: Visualizes the local slope maps (X and Y).
+        EN: Visualizes the local slope maps (X and Y) IN RADIANS.
         
         Args:
             save_path (str, optional): Chemin pour sauvegarder l'image.
@@ -1159,7 +1207,7 @@ class ShackHartmann:
         # Visualisation
         fig, axes = plt.subplots(1, 2, figsize=(16, 8))
 
-        # Pentes X
+        # Pentes X EN RADIANS
         im1 = axes[0].imshow(
             self.slopes_x,
             extent=[x_min, x_max, y_min, y_max],
@@ -1167,13 +1215,13 @@ class ShackHartmann:
             origin='lower'
         )
         axes[0].set_title(f"Pentes locales X (dφ/dx) - {self.name}\n"
-                         f"PV={np.max(self.slopes_x) - np.min(self.slopes_x):.6f} rad/mm, "
-                         f"RMS={np.std(self.slopes_x):.6f} rad/mm")
+                         f"PV={np.max(self.slopes_x) - np.min(self.slopes_x):.6f} rad, "
+                         f"RMS={np.std(self.slopes_x):.6f} rad")
         axes[0].set_xlabel("x (mm)")
         axes[0].set_ylabel("y (mm)")
-        plt.colorbar(im1, ax=axes[0], label="Pente (rad/mm)")
+        plt.colorbar(im1, ax=axes[0], label="Pente (rad)")
 
-        # Pentes Y
+        # Pentes Y EN RADIANS
         im2 = axes[1].imshow(
             self.slopes_y,
             extent=[x_min, x_max, y_min, y_max],
@@ -1181,11 +1229,11 @@ class ShackHartmann:
             origin='lower'
         )
         axes[1].set_title(f"Pentes locales Y (dφ/dy) - {self.name}\n"
-                         f"PV={np.max(self.slopes_y) - np.min(self.slopes_y):.6f} rad/mm, "
-                         f"RMS={np.std(self.slopes_y):.6f} rad/mm")
+                         f"PV={np.max(self.slopes_y) - np.min(self.slopes_y):.6f} rad, "
+                         f"RMS={np.std(self.slopes_y):.6f} rad")
         axes[1].set_xlabel("x (mm)")
         axes[1].set_ylabel("y (mm)")
-        plt.colorbar(im2, ax=axes[1], label="Pente (rad/mm)")
+        plt.colorbar(im2, ax=axes[1], label="Pente (rad)")
 
         plt.tight_layout()
 
@@ -1202,9 +1250,9 @@ class ShackHartmann:
                          show: bool = False,
                          cmap: str = "hot") -> None:
         """
-        FR: Visualise les cartes d'erreur (centroïdes et pentes).
+        FR: Visualise les cartes d'erreur (centroïdes et pentes) EN RADIANS.
             
-        EN: Visualizes the error maps (centroids and slopes).
+        EN: Visualizes the error maps (centroids and slopes) IN RADIANS.
         
         Args:
             save_path (str, optional): Chemin pour sauvegarder l'image.
@@ -1235,7 +1283,7 @@ class ShackHartmann:
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-        # Erreurs sur les centroïdes
+        # Erreurs sur les centroïdes (en pixels)
         im1 = axes[0, 0].imshow(
             centroid_error_map,
             extent=[x_min, x_max, y_min, y_max],
@@ -1249,7 +1297,7 @@ class ShackHartmann:
         axes[0, 0].set_ylabel("y (mm)")
         plt.colorbar(im1, ax=axes[0, 0], label="Erreur (pixels)")
 
-        # Erreurs sur les pentes X
+        # Erreurs sur les pentes X EN RADIANS
         im2 = axes[0, 1].imshow(
             slope_error_x,
             extent=[x_min, x_max, y_min, y_max],
@@ -1257,13 +1305,13 @@ class ShackHartmann:
             origin='lower'
         )
         axes[0, 1].set_title(f"Erreurs sur les pentes X - {self.name}\n"
-                            f"Moyenne={np.mean(slope_error_x):.6f} rad/mm, "
-                            f"Max={np.max(slope_error_x):.6f} rad/mm")
+                            f"Moyenne={np.mean(slope_error_x):.6f} rad, "
+                            f"Max={np.max(slope_error_x):.6f} rad")
         axes[0, 1].set_xlabel("x (mm)")
         axes[0, 1].set_ylabel("y (mm)")
-        plt.colorbar(im2, ax=axes[0, 1], label="Erreur (rad/mm)")
+        plt.colorbar(im2, ax=axes[0, 1], label="Erreur (rad)")
 
-        # Erreurs sur les pentes Y
+        # Erreurs sur les pentes Y EN RADIANS
         im3 = axes[1, 0].imshow(
             slope_error_y,
             extent=[x_min, x_max, y_min, y_max],
@@ -1271,13 +1319,13 @@ class ShackHartmann:
             origin='lower'
         )
         axes[1, 0].set_title(f"Erreurs sur les pentes Y - {self.name}\n"
-                            f"Moyenne={np.mean(slope_error_y):.6f} rad/mm, "
-                            f"Max={np.max(slope_error_y):.6f} rad/mm")
+                            f"Moyenne={np.mean(slope_error_y):.6f} rad, "
+                            f"Max={np.max(slope_error_y):.6f} rad")
         axes[1, 0].set_xlabel("x (mm)")
         axes[1, 0].set_ylabel("y (mm)")
-        plt.colorbar(im3, ax=axes[1, 0], label="Erreur (rad/mm)")
+        plt.colorbar(im3, ax=axes[1, 0], label="Erreur (rad)")
 
-        # Erreur totale sur les pentes
+        # Erreur totale sur les pentes EN RADIANS
         im4 = axes[1, 1].imshow(
             total_slope_error,
             extent=[x_min, x_max, y_min, y_max],
@@ -1285,11 +1333,11 @@ class ShackHartmann:
             origin='lower'
         )
         axes[1, 1].set_title(f"Erreur totale sur les pentes - {self.name}\n"
-                            f"Moyenne={np.mean(total_slope_error):.6f} rad/mm, "
-                            f"Max={np.max(total_slope_error):.6f} rad/mm")
+                            f"Moyenne={np.mean(total_slope_error):.6f} rad, "
+                            f"Max={np.max(total_slope_error):.6f} rad")
         axes[1, 1].set_xlabel("x (mm)")
         axes[1, 1].set_ylabel("y (mm)")
-        plt.colorbar(im4, ax=axes[1, 1], label="Erreur (rad/mm)")
+        plt.colorbar(im4, ax=axes[1, 1], label="Erreur (rad)")
 
         plt.tight_layout()
 
@@ -1328,13 +1376,13 @@ class ShackHartmann:
             show=False
         )
 
-        # Cartes des pentes
+        # Cartes des pentes EN RADIANS
         self.visualize_slopes(
             save_path=os.path.join(output_dir, f"{self.name}_slopes.png"),
             show=False
         )
 
-        # Cartes des erreurs
+        # Cartes des erreurs EN RADIANS
         self.visualize_errors(
             save_path=os.path.join(output_dir, f"{self.name}_errors.png"),
             show=False
@@ -1367,14 +1415,15 @@ class ShackHartmann:
             'pixel_size_mm': self.camera.pixel_width_mm,
             'microlens_array': self.microlens_array,
             'camera': self.camera,
-            'spot_image': self.spot_image
+            'spot_image': self.spot_image,
+            'slope_units': 'rad'  # UNITÉS CORRIGÉES
         }
 
     def get_slope_statistics(self) -> Dict:
         """
-        FR: Retourne les statistiques des pentes (PV, RMS, etc.).
+        FR: Retourne les statistiques des pentes (PV, RMS, etc.) EN RADIANS.
             
-        EN: Returns slope statistics (PV, RMS, etc.).
+        EN: Returns slope statistics (PV, RMS, etc.) IN RADIANS.
         
         Returns:
             Dict: Dictionnaire avec les statistiques des pentes.
@@ -1384,34 +1433,38 @@ class ShackHartmann:
 
         return {
             'slopes_x': {
-                'min': np.min(self.slopes_x),
-                'max': np.max(self.slopes_x),
-                'mean': np.mean(self.slopes_x),
-                'std': np.std(self.slopes_x),
-                'pv': np.max(self.slopes_x) - np.min(self.slopes_x),
-                'rms': np.std(self.slopes_x)
+                'min': float(np.min(self.slopes_x)),
+                'max': float(np.max(self.slopes_x)),
+                'mean': float(np.mean(self.slopes_x)),
+                'std': float(np.std(self.slopes_x)),
+                'pv': float(np.max(self.slopes_x) - np.min(self.slopes_x)),
+                'rms': float(np.std(self.slopes_x)),
+                'units': 'rad'  # UNITÉS CORRIGÉES
             },
             'slopes_y': {
-                'min': np.min(self.slopes_y),
-                'max': np.max(self.slopes_y),
-                'mean': np.mean(self.slopes_y),
-                'std': np.std(self.slopes_y),
-                'pv': np.max(self.slopes_y) - np.min(self.slopes_y),
-                'rms': np.std(self.slopes_y)
+                'min': float(np.min(self.slopes_y)),
+                'max': float(np.max(self.slopes_y)),
+                'mean': float(np.mean(self.slopes_y)),
+                'std': float(np.std(self.slopes_y)),
+                'pv': float(np.max(self.slopes_y) - np.min(self.slopes_y)),
+                'rms': float(np.std(self.slopes_y)),
+                'units': 'rad'  # UNITÉS CORRIGÉES
             },
             'slope_errors_x': {
-                'min': np.min(self.slope_errors[..., 0]),
-                'max': np.max(self.slope_errors[..., 0]),
-                'mean': np.mean(self.slope_errors[..., 0]),
-                'std': np.std(self.slope_errors[..., 0]),
-                'rms': np.std(self.slope_errors[..., 0])
+                'min': float(np.min(self.slope_errors[..., 0])),
+                'max': float(np.max(self.slope_errors[..., 0])),
+                'mean': float(np.mean(self.slope_errors[..., 0])),
+                'std': float(np.std(self.slope_errors[..., 0])),
+                'rms': float(np.std(self.slope_errors[..., 0])),
+                'units': 'rad'  # UNITÉS CORRIGÉES
             },
             'slope_errors_y': {
-                'min': np.min(self.slope_errors[..., 1]),
-                'max': np.max(self.slope_errors[..., 1]),
-                'mean': np.mean(self.slope_errors[..., 1]),
-                'std': np.std(self.slope_errors[..., 1]),
-                'rms': np.std(self.slope_errors[..., 1])
+                'min': float(np.min(self.slope_errors[..., 1])),
+                'max': float(np.max(self.slope_errors[..., 1])),
+                'mean': float(np.mean(self.slope_errors[..., 1])),
+                'std': float(np.std(self.slope_errors[..., 1])),
+                'rms': float(np.std(self.slope_errors[..., 1])),
+                'units': 'rad'  # UNITÉS CORRIGÉES
             }
         }
 
@@ -1444,8 +1497,10 @@ def create_shack_hartmann(
 ) -> ShackHartmann:
     """
     FR: Fabrique un système Shack-Hartmann complet avec des paramètres par défaut.
+        Les pentes seront calculées EN RADIANS.
         
     EN: Factory function to create a complete Shack-Hartmann system with default parameters.
+        Slopes will be calculated IN RADIANS.
     
     Args:
         name (str): Nom du système.
@@ -1467,6 +1522,8 @@ def create_shack_hartmann(
     
     Sources:
         - "Principles of Adaptive Optics" by Tyson (1991)
+        - "Adaptive Optics for Astronomical Telescopes" by Hardy (1998)
+          -> Slope formula: theta = arctan(dx/f) in RADIANS
     """
     if not MICROSTRUCTURE_AVAILABLE:
         raise ImportError("Microstructure module required for create_shack_hartmann()")
@@ -1565,6 +1622,48 @@ class TestShackHartmann:
         assert sh.slopes_x.shape == (3, 3)
         assert sh.slopes_y.shape == (3, 3)
 
+    def test_slope_units_are_radians(self):
+        """FR: Test que les pentes sont bien en radians et non en rad/mm."""
+        if not BEAM_AVAILABLE or not PROPAGATION_AVAILABLE or not MICROSTRUCTURE_AVAILABLE or not CAMERA_AVAILABLE:
+            return
+
+        sh = create_shack_hartmann(
+            name="Test Units",
+            num_microlenses_x=3,
+            num_microlenses_y=3,
+            focal_length_mm=20.0
+        )
+
+        # Créer un faisceau décentré pour avoir des pentes non nulles
+        beam = Beam(
+            wavelength_nm=633.0,
+            diameter_mm=5.0,
+            num_points=128
+        )
+        electric_field = beam.generate_electric_field(method="gaussian", sigma_mm=0.5)
+        # Décaler le faisceau de 0.5 mm
+        x = np.linspace(-beam.diameter_mm/2, beam.diameter_mm/2, beam.num_points)
+        y = np.linspace(-beam.diameter_mm/2, beam.diameter_mm/2, beam.num_points)
+        X, Y = np.meshgrid(x, y)
+        shifted_field = electric_field * np.exp(1j * 2 * np.pi * 0.5 / beam.wavelength_nm * 1e-3)  # Décalage de 0.5 mm
+        beam.electric_field = shifted_field
+        beam.intensity = beam.compute_intensity_from_electric_field(shifted_field)
+
+        sh.simulate(beam)
+
+        slopes_x, slopes_y = sh.get_slope_maps()
+        
+        # Les pentes doivent être en radians
+        # Pour un décalage de 0.5 mm avec f=20 mm : theta = arctan(0.5/20) ≈ 0.025 rad
+        # Vérifier que les valeurs sont dans une plage raisonnable pour des radians
+        assert np.all(np.abs(slopes_x) < np.pi/2), "Les pentes doivent être < π/2 rad"
+        assert np.all(np.abs(slopes_y) < np.pi/2), "Les pentes doivent être < π/2 rad"
+        
+        # Vérifier que les unités sont bien en 'rad' dans les statistiques
+        stats = sh.get_slope_statistics()
+        assert stats['slopes_x']['units'] == 'rad', "Les unités doivent être en rad"
+        assert stats['slopes_y']['units'] == 'rad', "Les unités doivent être en rad"
+
     def test_centroid_algorithms(self):
         """FR: Test les différents algorithmes de calcul des centroïdes."""
         if not BEAM_AVAILABLE or not PROPAGATION_AVAILABLE or not MICROSTRUCTURE_AVAILABLE or not CAMERA_AVAILABLE:
@@ -1626,8 +1725,8 @@ class TestShackHartmann:
         assert slopes_y.shape == (3, 3)
 
         # Les pentes doivent être proches de 0 pour un faisceau gaussien centré
-        assert np.abs(np.mean(slopes_x)) < 0.1
-        assert np.abs(np.mean(slopes_y)) < 0.1
+        assert np.abs(np.mean(slopes_x)) < 0.01
+        assert np.abs(np.mean(slopes_y)) < 0.01
 
     def test_error_estimation(self):
         """FR: Test l'estimation des erreurs."""
@@ -1738,6 +1837,8 @@ class TestShackHartmann:
 
         assert 'pv' in stats['slopes_x']
         assert 'rms' in stats['slopes_x']
+        assert stats['slopes_x']['units'] == 'rad'
+        assert stats['slopes_y']['units'] == 'rad'
 
 
 if __name__ == "__main__":
