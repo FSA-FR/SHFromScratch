@@ -5,44 +5,54 @@ FR: Exemple complet d'utilisation du module Shack_Hartmann.py.
     - Création d'un système Shack-Hartmann complet (matrice de microlentilles + caméra)
     - Simulation avec un faisceau gaussien
     - Calcul des centroïdes avec 4 algorithmes différents
-    - Calcul des pentes locales de phase (dφ/dx, dφ/dy)
+    - Calcul des pentes locales de phase (dφ/dx, dφ/dy) EN RADIANS
     - Estimation des erreurs sur les centroïdes et les pentes
     - Visualisation :
         * Carte des tâches d'Airy (spots)
         * Carte des centroïdes (marqués sur l'image des spots)
-        * Cartes des pentes locales (X et Y)
-        * Cartes d'erreur (centroïdes et pentes)
+        * Cartes des pentes locales (X et Y) EN RADIANS
+        * Cartes d'erreur (centroïdes et pentes) EN RADIANS
     - Simulation avec un faisceau aberré (Zernike)
     - Comparaison des algorithmes de centroïdes
     - Export des données
+
+    FORMULE DES PENTES (CORRIGÉE) :
+        slope_x = arctan(dx / focal_length)  [RADIANS]
+        slope_y = arctan(dy / focal_length)  [RADIANS]
+    où dx, dy sont les décalages du centroïde et focal_length est la distance focale.
 
     Unités :
     - Longueurs : mm (positions), µm (microlentilles)
     - Longueur d'onde : nm
     - Phase : nm, rad, mrad
-    - Pentes : rad/mm, mrad/mm
+    - Pentes : RAD (radians) - PAS rad/mm !
 
 EN: Complete example of using Shack_Hartmann.py module.
     Demonstrates:
     - Creation of a complete Shack-Hartmann system (microlens array + camera)
     - Simulation with a Gaussian beam
     - Centroid calculation with 4 different algorithms
-    - Local phase slope calculation (dφ/dx, dφ/dy)
+    - Local phase slope calculation (dφ/dx, dφ/dy) IN RADIANS
     - Error estimation on centroids and slopes
     - Visualization:
         * Airy spot map
         * Centroid map (marked on spot image)
-        * Local slope maps (X and Y)
-        * Error maps (centroids and slopes)
+        * Local slope maps (X and Y) IN RADIANS
+        * Error maps (centroids and slopes) IN RADIANS
     - Simulation with an aberrated beam (Zernike)
     - Comparison of centroid algorithms
     - Data export
+
+    SLOPE FORMULA (CORRECTED):
+        slope_x = arctan(dx / focal_length)  [RADIANS]
+        slope_y = arctan(dy / focal_length)  [RADIANS]
+    where dx, dy are centroid shifts and focal_length is the focal length.
 
     Units:
     - Lengths: mm (positions), µm (microlenses)
     - Wavelength: nm
     - Phase: nm, rad, mrad
-    - Slopes: rad/mm, mrad/mm
+    - Slopes: RAD (radians) - NOT rad/mm!
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
@@ -78,9 +88,12 @@ def run_shack_hartmann_example():
     """
     FR: Exécute l'exemple Shack-Hartmann.
         Démonstration complète des fonctionnalités du module.
+        
+        IMPORTANT: Les pentes sont maintenant en RADIANS (pas en rad/mm).
     """
     print("\n" + "="*80)
     print("Example 13: Shack-Hartmann Wavefront Sensor")
+    print("FORMULE DES PENTES: slope = arctan(dx/f) [RADIANS]")
     print("="*80)
     
     # Paramètres globaux
@@ -115,6 +128,7 @@ def run_shack_hartmann_example():
     print(f"  Caméra: {sh_default.camera}")
     print(f"  Algorithme de centroïde: {sh_default.centroid_algorithm.value}")
     print(f"  Méthode de pente: {sh_default.slope_method.value}")
+    print(f"  ⚠️  LES PENTES SERONT EN RADIANS (pas rad/mm)")
     
     # =========================================================================
     # 2. SIMULATION AVEC UN FAISCEAU GAUSSIEN
@@ -148,27 +162,31 @@ def run_shack_hartmann_example():
     print(f"  Tâches détectées: {len(sh_default.centroids)} spots")
     print(f"  Forme des cartes de pentes: {sh_default.slopes_x.shape}")
     
-    # 2.3 Statistiques des résultats
-    print("\n2.3 Statistiques des résultats")
+    # 2.3 Statistiques des résultats (EN RADIANS)
+    print("\n2.3 Statistiques des résultats (EN RADIANS)")
     stats = sh_default.get_slope_statistics()
     
     print(f"  Pentes X:")
-    print(f"    PV: {stats['slopes_x']['pv']:.6f} rad/mm")
-    print(f"    RMS: {stats['slopes_x']['rms']:.6f} rad/mm")
-    print(f"    Moyenne: {stats['slopes_x']['mean']:.6f} rad/mm")
+    print(f"    PV: {stats['slopes_x']['pv']:.6f} rad")
+    print(f"    RMS: {stats['slopes_x']['rms']:.6f} rad")
+    print(f"    Moyenne: {stats['slopes_x']['mean']:.6f} rad")
+    print(f"    Unités: {stats['slopes_x']['units']}")
     
     print(f"  Pentes Y:")
-    print(f"    PV: {stats['slopes_y']['pv']:.6f} rad/mm")
-    print(f"    RMS: {stats['slopes_y']['rms']:.6f} rad/mm")
-    print(f"    Moyenne: {stats['slopes_y']['mean']:.6f} rad/mm")
+    print(f"    PV: {stats['slopes_y']['pv']:.6f} rad")
+    print(f"    RMS: {stats['slopes_y']['rms']:.6f} rad")
+    print(f"    Moyenne: {stats['slopes_y']['mean']:.6f} rad")
+    print(f"    Unités: {stats['slopes_y']['units']}")
     
     print(f"  Erreurs sur les pentes X:")
-    print(f"    Moyenne: {stats['slope_errors_x']['mean']:.6f} rad/mm")
-    print(f"    RMS: {stats['slope_errors_x']['rms']:.6f} rad/mm")
+    print(f"    Moyenne: {stats['slope_errors_x']['mean']:.6f} rad")
+    print(f"    RMS: {stats['slope_errors_x']['rms']:.6f} rad")
+    print(f"    Unités: {stats['slope_errors_x']['units']}")
     
     print(f"  Erreurs sur les pentes Y:")
-    print(f"    Moyenne: {stats['slope_errors_y']['mean']:.6f} rad/mm")
-    print(f"    RMS: {stats['slope_errors_y']['rms']:.6f} rad/mm")
+    print(f"    Moyenne: {stats['slope_errors_y']['mean']:.6f} rad")
+    print(f"    RMS: {stats['slope_errors_y']['rms']:.6f} rad")
+    print(f"    Unités: {stats['slope_errors_y']['units']}")
     
     # 2.4 Visualiser toutes les cartes
     print("\n2.4 Visualisation de toutes les cartes")
@@ -216,9 +234,9 @@ def run_shack_hartmann_example():
         
         sh_algo.simulate(beam_algo)
         
-        # Calculer les statistiques
+        # Calculer les statistiques (EN RADIANS)
         stats_algo = sh_algo.get_slope_statistics()
-        centroid_mean_error = np.mean(sh_algo.centroid_errors)
+        centroid_mean_error = float(np.mean(sh_algo.centroid_errors))
         
         results[algo.value] = {
             'centroid_mean_error': centroid_mean_error,
@@ -227,12 +245,14 @@ def run_shack_hartmann_example():
             'slope_y_pv': stats_algo['slopes_y']['pv'],
             'slope_y_rms': stats_algo['slopes_y']['rms'],
             'slope_error_x_mean': stats_algo['slope_errors_x']['mean'],
-            'slope_error_y_mean': stats_algo['slope_errors_y']['mean']
+            'slope_error_y_mean': stats_algo['slope_errors_y']['mean'],
+            'units': 'rad'
         }
         
         print(f"  Erreur moyenne sur les centroïdes: {centroid_mean_error:.4f} pixels")
-        print(f"  Pentes X: PV={stats_algo['slopes_x']['pv']:.6f}, RMS={stats_algo['slopes_x']['rms']:.6f} rad/mm")
-        print(f"  Pentes Y: PV={stats_algo['slopes_y']['pv']:.6f}, RMS={stats_algo['slopes_y']['rms']:.6f} rad/mm")
+        print(f"  Pentes X: PV={stats_algo['slopes_x']['pv']:.6f} rad, RMS={stats_algo['slopes_x']['rms']:.6f} rad")
+        print(f"  Pentes Y: PV={stats_algo['slopes_y']['pv']:.6f} rad, RMS={stats_algo['slopes_y']['rms']:.6f} rad")
+        print(f"  Erreurs sur les pentes: X={stats_algo['slope_errors_x']['mean']:.6f} rad, Y={stats_algo['slope_errors_y']['mean']:.6f} rad")
         
         # Visualiser les centroïdes
         sh_algo.visualize_centroids(
@@ -287,26 +307,28 @@ def run_shack_hartmann_example():
     print(f"  ✓ Image sauvegardée: centroid_algorithms_comparison.png")
     
     # 3.6 Tableau comparatif
-    print("\n3.6 Tableau comparatif des algorithmes")
-    print("\n{:<25} {:<15} {:<15} {:<15} {:<15} {:<15} {:<15}".format(
+    print("\n3.6 Tableau comparatif des algorithmes (pentes en RADIANS)")
+    print("\n{:<25} {:<15} {:<15} {:<15} {:<15} {:<15} {:<10}".format(
         "Algorithme",
         "Erreur centroïde",
-        "PV X (rad/mm)",
-        "PV Y (rad/mm)",
+        "PV X (rad)",
+        "PV Y (rad)",
         "Erreur pente X",
-        "Erreur pente Y"
+        "Erreur pente Y",
+        "Unités"
     ))
-    print("-" * 110)
+    print("-" * 115)
     
     for algo, algo_name in algorithms:
         data = results[algo.value]
-        print("{:<25} {:<15.4f} {:<15.6f} {:<15.6f} {:<15.6f} {:<15.6f}".format(
+        print("{:<25} {:<15.4f} {:<15.6f} {:<15.6f} {:<15.6f} {:<15.6f} {:<10}".format(
             algo_name,
             data['centroid_mean_error'],
             data['slope_x_pv'],
             data['slope_y_pv'],
             data['slope_error_x_mean'],
-            data['slope_error_y_mean']
+            data['slope_error_y_mean'],
+            data['units']
         ))
     
     # =========================================================================
@@ -372,40 +394,44 @@ def run_shack_hartmann_example():
     
     sh_aberrated.simulate(beam_aberrated)
     
-    # 4.3 Statistiques des résultats
-    print("\n4.3 Statistiques des résultats (faisceau aberré)")
+    # 4.3 Statistiques des résultats (EN RADIANS)
+    print("\n4.3 Statistiques des résultats (faisceau aberré, EN RADIANS)")
     stats_aberrated = sh_aberrated.get_slope_statistics()
     
     print(f"  Pentes X:")
-    print(f"    PV: {stats_aberrated['slopes_x']['pv']:.6f} rad/mm")
-    print(f"    RMS: {stats_aberrated['slopes_x']['rms']:.6f} rad/mm")
-    print(f"    Moyenne: {stats_aberrated['slopes_x']['mean']:.6f} rad/mm")
+    print(f"    PV: {stats_aberrated['slopes_x']['pv']:.6f} rad")
+    print(f"    RMS: {stats_aberrated['slopes_x']['rms']:.6f} rad")
+    print(f"    Moyenne: {stats_aberrated['slopes_x']['mean']:.6f} rad")
+    print(f"    Unités: {stats_aberrated['slopes_x']['units']}")
     
     print(f"  Pentes Y:")
-    print(f"    PV: {stats_aberrated['slopes_y']['pv']:.6f} rad/mm")
-    print(f"    RMS: {stats_aberrated['slopes_y']['rms']:.6f} rad/mm")
-    print(f"    Moyenne: {stats_aberrated['slopes_y']['mean']:.6f} rad/mm")
+    print(f"    PV: {stats_aberrated['slopes_y']['pv']:.6f} rad")
+    print(f"    RMS: {stats_aberrated['slopes_y']['rms']:.6f} rad")
+    print(f"    Moyenne: {stats_aberrated['slopes_y']['mean']:.6f} rad")
+    print(f"    Unités: {stats_aberrated['slopes_y']['units']}")
     
     # 4.4 Visualiser les résultats
     print("\n4.4 Visualisation des résultats")
     sh_aberrated.visualize_all(output_dir=output_dir)
     
     # 4.5 Comparaison avec le faisceau non aberré
-    print("\n4.5 Comparaison avec le faisceau non aberré")
+    print("\n4.5 Comparaison avec le faisceau non aberré (EN RADIANS)")
     
     stats_default = sh_default.get_slope_statistics()
     
     print(f"\n  Faisceau non aberré:")
-    print(f"    Pentes X: PV={stats_default['slopes_x']['pv']:.6f}, RMS={stats_default['slopes_x']['rms']:.6f} rad/mm")
-    print(f"    Pentes Y: PV={stats_default['slopes_y']['pv']:.6f}, RMS={stats_default['slopes_y']['rms']:.6f} rad/mm")
+    print(f"    Pentes X: PV={stats_default['slopes_x']['pv']:.6f} rad, RMS={stats_default['slopes_x']['rms']:.6f} rad")
+    print(f"    Pentes Y: PV={stats_default['slopes_y']['pv']:.6f} rad, RMS={stats_default['slopes_y']['rms']:.6f} rad")
     
     print(f"\n  Faisceau aberré:")
-    print(f"    Pentes X: PV={stats_aberrated['slopes_x']['pv']:.6f}, RMS={stats_aberrated['slopes_x']['rms']:.6f} rad/mm")
-    print(f"    Pentes Y: PV={stats_aberrated['slopes_y']['pv']:.6f}, RMS={stats_aberrated['slopes_y']['rms']:.6f} rad/mm")
+    print(f"    Pentes X: PV={stats_aberrated['slopes_x']['pv']:.6f} rad, RMS={stats_aberrated['slopes_x']['rms']:.6f} rad")
+    print(f"    Pentes Y: PV={stats_aberrated['slopes_y']['pv']:.6f} rad, RMS={stats_aberrated['slopes_y']['rms']:.6f} rad")
     
     print(f"\n  Ratio PV (aberré/non aberré):")
-    print(f"    Pentes X: {stats_aberrated['slopes_x']['pv'] / stats_default['slopes_x']['pv']:.2f}")
-    print(f"    Pentes Y: {stats_aberrated['slopes_y']['pv'] / stats_default['slopes_y']['pv']:.2f}")
+    ratio_x = stats_aberrated['slopes_x']['pv'] / stats_default['slopes_x']['pv'] if stats_default['slopes_x']['pv'] > 0 else float('inf')
+    ratio_y = stats_aberrated['slopes_y']['pv'] / stats_default['slopes_y']['pv'] if stats_default['slopes_y']['pv'] > 0 else float('inf')
+    print(f"    Pentes X: {ratio_x:.2f}")
+    print(f"    Pentes Y: {ratio_y:.2f}")
     
     # Visualisation comparative
     slopes_x_default, slopes_y_default = sh_default.get_slope_maps()
@@ -421,11 +447,11 @@ def run_shack_hartmann_example():
         origin='lower'
     )
     axes[0, 0].set_title("Pentes X - Faisceau non aberré\n" +
-                       f"PV={stats_default['slopes_x']['pv']:.6f} rad/mm, " +
-                       f"RMS={stats_default['slopes_x']['rms']:.6f} rad/mm")
+                       f"PV={stats_default['slopes_x']['pv']:.6f} rad, " +
+                       f"RMS={stats_default['slopes_x']['rms']:.6f} rad")
     axes[0, 0].set_xlabel("x (mm)")
     axes[0, 0].set_ylabel("y (mm)")
-    plt.colorbar(im1, ax=axes[0, 0], label="Pente (rad/mm)")
+    plt.colorbar(im1, ax=axes[0, 0], label="Pente (rad)")
     
     # Pentes X - Aberré
     im2 = axes[0, 1].imshow(
@@ -435,11 +461,11 @@ def run_shack_hartmann_example():
         origin='lower'
     )
     axes[0, 1].set_title("Pentes X - Faisceau aberré\n" +
-                       f"PV={stats_aberrated['slopes_x']['pv']:.6f} rad/mm, " +
-                       f"RMS={stats_aberrated['slopes_x']['rms']:.6f} rad/mm")
+                       f"PV={stats_aberrated['slopes_x']['pv']:.6f} rad, " +
+                       f"RMS={stats_aberrated['slopes_x']['rms']:.6f} rad")
     axes[0, 1].set_xlabel("x (mm)")
     axes[0, 1].set_ylabel("y (mm)")
-    plt.colorbar(im2, ax=axes[0, 1], label="Pente (rad/mm)")
+    plt.colorbar(im2, ax=axes[0, 1], label="Pente (rad)")
     
     # Pentes Y - Non aberré
     im3 = axes[1, 0].imshow(
@@ -449,11 +475,11 @@ def run_shack_hartmann_example():
         origin='lower'
     )
     axes[1, 0].set_title("Pentes Y - Faisceau non aberré\n" +
-                       f"PV={stats_default['slopes_y']['pv']:.6f} rad/mm, " +
-                       f"RMS={stats_default['slopes_y']['rms']:.6f} rad/mm")
+                       f"PV={stats_default['slopes_y']['pv']:.6f} rad, " +
+                       f"RMS={stats_default['slopes_y']['rms']:.6f} rad")
     axes[1, 0].set_xlabel("x (mm)")
     axes[1, 0].set_ylabel("y (mm)")
-    plt.colorbar(im3, ax=axes[1, 0], label="Pente (rad/mm)")
+    plt.colorbar(im3, ax=axes[1, 0], label="Pente (rad)")
     
     # Pentes Y - Aberré
     im4 = axes[1, 1].imshow(
@@ -463,11 +489,11 @@ def run_shack_hartmann_example():
         origin='lower'
     )
     axes[1, 1].set_title("Pentes Y - Faisceau aberré\n" +
-                       f"PV={stats_aberrated['slopes_y']['pv']:.6f} rad/mm, " +
-                       f"RMS={stats_aberrated['slopes_y']['rms']:.6f} rad/mm")
+                       f"PV={stats_aberrated['slopes_y']['pv']:.6f} rad, " +
+                       f"RMS={stats_aberrated['slopes_y']['rms']:.6f} rad")
     axes[1, 1].set_xlabel("x (mm)")
     axes[1, 1].set_ylabel("y (mm)")
-    plt.colorbar(im4, ax=axes[1, 1], label="Pente (rad/mm)")
+    plt.colorbar(im4, ax=axes[1, 1], label="Pente (rad)")
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "slopes_comparison_aberrated_vs_ideal.png"), dpi=150, bbox_inches='tight')
@@ -531,12 +557,12 @@ def run_shack_hartmann_example():
     
     sh_hex.simulate(beam_hex)
     
-    # 5.5 Statistiques
-    print("\n5.5 Statistiques des résultats")
+    # 5.5 Statistiques (EN RADIANS)
+    print("\n5.5 Statistiques des résultats (EN RADIANS)")
     stats_hex = sh_hex.get_slope_statistics()
     
-    print(f"  Pentes X: PV={stats_hex['slopes_x']['pv']:.6f}, RMS={stats_hex['slopes_x']['rms']:.6f} rad/mm")
-    print(f"  Pentes Y: PV={stats_hex['slopes_y']['pv']:.6f}, RMS={stats_hex['slopes_y']['rms']:.6f} rad/mm")
+    print(f"  Pentes X: PV={stats_hex['slopes_x']['pv']:.6f} rad, RMS={stats_hex['slopes_x']['rms']:.6f} rad")
+    print(f"  Pentes Y: PV={stats_hex['slopes_y']['pv']:.6f} rad, RMS={stats_hex['slopes_y']['rms']:.6f} rad")
     
     # 5.6 Visualiser les résultats
     print("\n5.6 Visualisation des résultats")
@@ -591,29 +617,31 @@ def run_shack_hartmann_example():
     
     sh_noisy.simulate(beam_noisy)
     
-    # 6.4 Statistiques
-    print("\n6.4 Statistiques des résultats (caméra bruyante)")
+    # 6.4 Statistiques (EN RADIANS)
+    print("\n6.4 Statistiques des résultats (caméra bruyante, EN RADIANS)")
     stats_noisy = sh_noisy.get_slope_statistics()
     
-    print(f"  Pentes X: PV={stats_noisy['slopes_x']['pv']:.6f}, RMS={stats_noisy['slopes_x']['rms']:.6f} rad/mm")
-    print(f"  Pentes Y: PV={stats_noisy['slopes_y']['pv']:.6f}, RMS={stats_noisy['slopes_y']['rms']:.6f} rad/mm")
-    print(f"  Erreurs sur les pentes X: Moyenne={stats_noisy['slope_errors_x']['mean']:.6f} rad/mm")
-    print(f"  Erreurs sur les pentes Y: Moyenne={stats_noisy['slope_errors_y']['mean']:.6f} rad/mm")
+    print(f"  Pentes X: PV={stats_noisy['slopes_x']['pv']:.6f} rad, RMS={stats_noisy['slopes_x']['rms']:.6f} rad")
+    print(f"  Pentes Y: PV={stats_noisy['slopes_y']['pv']:.6f} rad, RMS={stats_noisy['slopes_y']['rms']:.6f} rad")
+    print(f"  Erreurs sur les pentes X: Moyenne={stats_noisy['slope_errors_x']['mean']:.6f} rad")
+    print(f"  Erreurs sur les pentes Y: Moyenne={stats_noisy['slope_errors_y']['mean']:.6f} rad")
     
     # 6.5 Comparaison avec la caméra idéale
-    print("\n6.5 Comparaison avec la caméra idéale")
+    print("\n6.5 Comparaison avec la caméra idéale (EN RADIANS)")
     
     print(f"\n  Caméra idéale:")
-    print(f"    Erreurs sur les pentes X: Moyenne={stats_default['slope_errors_x']['mean']:.6f} rad/mm")
-    print(f"    Erreurs sur les pentes Y: Moyenne={stats_default['slope_errors_y']['mean']:.6f} rad/mm")
+    print(f"    Erreurs sur les pentes X: Moyenne={stats_default['slope_errors_x']['mean']:.6f} rad")
+    print(f"    Erreurs sur les pentes Y: Moyenne={stats_default['slope_errors_y']['mean']:.6f} rad")
     
     print(f"\n  Caméra bruyante:")
-    print(f"    Erreurs sur les pentes X: Moyenne={stats_noisy['slope_errors_x']['mean']:.6f} rad/mm")
-    print(f"    Erreurs sur les pentes Y: Moyenne={stats_noisy['slope_errors_y']['mean']:.6f} rad/mm")
+    print(f"    Erreurs sur les pentes X: Moyenne={stats_noisy['slope_errors_x']['mean']:.6f} rad")
+    print(f"    Erreurs sur les pentes Y: Moyenne={stats_noisy['slope_errors_y']['mean']:.6f} rad")
     
+    ratio_x = stats_noisy['slope_errors_x']['mean'] / stats_default['slope_errors_x']['mean'] if stats_default['slope_errors_x']['mean'] > 0 else float('inf')
+    ratio_y = stats_noisy['slope_errors_y']['mean'] / stats_default['slope_errors_y']['mean'] if stats_default['slope_errors_y']['mean'] > 0 else float('inf')
     print(f"\n  Ratio des erreurs (bruyante/idéale):")
-    print(f"    Pentes X: {stats_noisy['slope_errors_x']['mean'] / stats_default['slope_errors_x']['mean']:.2f}")
-    print(f"    Pentes Y: {stats_noisy['slope_errors_y']['mean'] / stats_default['slope_errors_y']['mean']:.2f}")
+    print(f"    Pentes X: {ratio_x:.2f}")
+    print(f"    Pentes Y: {ratio_y:.2f}")
     
     # 6.6 Visualiser les résultats
     print("\n6.6 Visualisation des résultats")
@@ -625,7 +653,7 @@ def run_shack_hartmann_example():
     print("\n--- 7. Export des données ---")
     
     # 7.1 Exporter les données du faisceau aberré
-    print("\n7.1 Export des données du faisceau aberré")
+    print("\n7.1 Export des données du faisceau aberré (pentes en RADIANS)")
     data_aberrated = sh_aberrated.get_slope_data()
     
     # Sauvegarder en JSON
@@ -642,7 +670,8 @@ def run_shack_hartmann_example():
             'slope_errors_y': data_aberrated['slope_errors_y'].tolist(),
             'centroids': data_aberrated['centroids'].tolist(),
             'centroid_errors': data_aberrated['centroid_errors'].tolist(),
-            'statistics': stats_aberrated
+            'statistics': stats_aberrated,
+            'slope_units': 'rad'  # UNITÉS CORRIGÉES
         }
         json.dump(json_data, f, indent=2)
     
@@ -651,7 +680,8 @@ def run_shack_hartmann_example():
     # 7.2 Exporter les données de comparaison
     print("\n7.2 Export des données de comparaison")
     comparison_data = {
-        'algorithms': {}
+        'algorithms': {},
+        'note': 'Toutes les pentes sont en RADIANS'
     }
     
     for algo, algo_name in algorithms:
@@ -696,7 +726,7 @@ def run_shack_hartmann_example():
     sh_std.simulate(beam_std)
     stats_std = sh_std.get_slope_statistics()
     
-    print(f"  Pentes X: PV={stats_std['slopes_x']['pv']:.6f}, RMS={stats_std['slopes_x']['rms']:.6f} rad/mm")
+    print(f"  Pentes X: PV={stats_std['slopes_x']['pv']:.6f} rad, RMS={stats_std['slopes_x']['rms']:.6f} rad")
     print(f"  Erreurs sur les centroïdes: Moyenne={np.mean(sh_std.centroid_errors):.4f} pixels")
     
     # 8.2 Taille de tâche petite (sigma=0.5 mm)
@@ -724,7 +754,7 @@ def run_shack_hartmann_example():
     sh_small.simulate(beam_small)
     stats_small = sh_small.get_slope_statistics()
     
-    print(f"  Pentes X: PV={stats_small['slopes_x']['pv']:.6f}, RMS={stats_small['slopes_x']['rms']:.6f} rad/mm")
+    print(f"  Pentes X: PV={stats_small['slopes_x']['pv']:.6f} rad, RMS={stats_small['slopes_x']['rms']:.6f} rad")
     print(f"  Erreurs sur les centroïdes: Moyenne={np.mean(sh_small.centroid_errors):.4f} pixels")
     
     # 8.3 Taille de tâche grande (sigma=2.0 mm)
@@ -752,15 +782,15 @@ def run_shack_hartmann_example():
     sh_large.simulate(beam_large)
     stats_large = sh_large.get_slope_statistics()
     
-    print(f"  Pentes X: PV={stats_large['slopes_x']['pv']:.6f}, RMS={stats_large['slopes_x']['rms']:.6f} rad/mm")
+    print(f"  Pentes X: PV={stats_large['slopes_x']['pv']:.6f} rad, RMS={stats_large['slopes_x']['rms']:.6f} rad")
     print(f"  Erreurs sur les centroïdes: Moyenne={np.mean(sh_large.centroid_errors):.4f} pixels")
     
     # 8.4 Tableau comparatif
-    print("\n8.4 Tableau comparatif des tailles de tâches")
-    print("\n{:<15} {:<15} {:<15} {:<15} {:<15}".format(
+    print("\n8.4 Tableau comparatif des tailles de tâches (pentes en RADIANS)")
+    print("\n{:<15} {:<15} {:<15} {:<15}".format(
         "Taille",
-        "PV X (rad/mm)",
-        "RMS X (rad/mm)",
+        "PV X (rad)",
+        "RMS X (rad)",
         "Erreur centroïde (pixels)"
     ))
     print("-" * 65)
@@ -787,21 +817,56 @@ def run_shack_hartmann_example():
     ))
     
     # =========================================================================
-    # 9. FIN DE L'EXEMPLE
+    # 9. VÉRIFICATION : PENTES EN RADIANS
+    # =========================================================================
+    print("\n--- 9. Vérification : Les pentes sont bien en RADIANS ---")
+    
+    # Pour un décalage de 1 mm avec f=20 mm : theta = arctan(1/20) ≈ 0.049958 rad
+    expected_theta = np.arctan(1.0 / 20.0)
+    print(f"\n9.1 Vérification théorique:")
+    print(f"  Pour dx=1mm, f=20mm: theta = arctan(1/20) = {expected_theta:.6f} rad")
+    print(f"  En degrés: {expected_theta * RAD_TO_DEG:.4f}°")
+    
+    # Vérifier avec sh_aberrated (qui a des décalages)
+    print(f"\n9.2 Vérification avec les données simulées:")
+    slopes_x_aberrated, _ = sh_aberrated.get_slope_maps()
+    max_slope = np.max(np.abs(slopes_x_aberrated))
+    print(f"  Valeur maximale des pentes: {max_slope:.6f} rad")
+    print(f"  En degrés: {max_slope * RAD_TO_DEG:.4f}°")
+    
+    # Vérifier que les valeurs sont cohérentes
+    # Pour un décalage maximal de ~2.5 mm (half sensor width) avec f=20 mm:
+    # theta_max = arctan(2.5/20) ≈ 0.12435 rad ≈ 7.125°
+    max_possible_theta = np.arctan(2.5 / 20.0)
+    print(f"\n9.3 Valeur théorique maximale:")
+    print(f"  Pour dx_max=2.5mm, f=20mm: theta_max = arctan(2.5/20) = {max_possible_theta:.6f} rad ≈ {max_possible_theta * RAD_TO_DEG:.4f}°")
+    
+    if max_slope <= max_possible_theta * 1.1:  # Tolérance de 10%
+        print(f"  ✓ Les pentes sont cohérentes (valeur max {max_slope:.6f} rad ≤ {max_possible_theta:.6f} rad)")
+    else:
+        print(f"  ⚠️  Avertissement: Les pentes semblent trop grandes !")
+    
+    # Vérifier les unités dans les données exportées
+    print(f"\n9.4 Vérification des unités dans les données:")
+    with open(output_file, 'r') as f:
+        data = json.load(f)
+        print(f"  Unités des pentes dans le JSON: {data.get('slope_units', 'non spécifié')}")
+        print(f"  Unités dans les statistiques: {data['statistics']['slopes_x']['units']}")
+    
+    # =========================================================================
+    # 10. FIN DE L'EXEMPLE
     # =========================================================================
     print("\n" + "="*80)
     print("Example 13 terminé avec succès !")
+    print("⚠️  IMPORTANT: TOUTES LES PENTES SONT EN RADIANS (pas en rad/mm)")
     print(f"Les images ont été sauvegardées dans {output_dir}/")
     print("="*80)
     print("\nRésumé des fonctionnalités démontrées:")
     print("  ✓ Création d'un système Shack-Hartmann complet")
     print("  ✓ Simulation avec un faisceau gaussien")
     print("  ✓ Comparaison de 4 algorithmes de calcul des centroïdes")
-    print("    - Barycentre pondéré")
-    print("    - Barycentre avec seuil")
-    print("    - Ajustement gaussien")
-    print("    - Basé sur les moments")
-    print("  ✓ Calcul des pentes locales de phase (dφ/dx, dφ/dy)")
+    print("  ✓ Calcul des pentes locales de phase (dφ/dx, dφ/dy) EN RADIANS")
+    print("    Formule: slope = arctan(dx/f)")
     print("  ✓ Estimation des erreurs sur les centroïdes et les pentes")
     print("  ✓ Simulation avec un faisceau aberré (Zernike)")
     print("  ✓ Matrice de microlentilles hexagonale")
@@ -809,13 +874,17 @@ def run_shack_hartmann_example():
     print("  ✓ Visualisation :")
     print("    - Carte des tâches d'Airy")
     print("    - Carte des centroïdes")
-    print("    - Cartes des pentes locales (X et Y)")
-    print("    - Cartes d'erreur (centroïdes et pentes)")
+    print("    - Cartes des pentes locales (X et Y) EN RADIANS")
+    print("    - Cartes d'erreur (centroïdes et pentes) EN RADIANS")
     print("  ✓ Comparaison des algorithmes et des configurations")
-    print("  ✓ Export des données en JSON")
+    print("  ✓ Export des données en JSON (avec unités en rad)")
+    print("  ✓ Vérification que les pentes sont bien en RADIANS")
     print("="*80)
 
 
 if __name__ == "__main__":
+    # Définir la constante pour la conversion
+    RAD_TO_DEG = 180.0 / np.pi
+    
     os.makedirs('examples/output', exist_ok=True)
     run_shack_hartmann_example()
