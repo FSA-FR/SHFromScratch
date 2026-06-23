@@ -1,51 +1,329 @@
 """
-SHFromScratch
-FR: Package Python pour la simulation de capteurs Shack-Hartmann.
-    Ce package permet de simuler la propagation d'un faisceau à travers une matrice de microlentilles ou de microtrous
-    jusqu'au plan d'une caméra virtuelle, puis le calcul de pente locale et la reconstruction de la phase.
+SHFromScratch - Package pour la simulation de systèmes Shack-Hartmann
 
-EN: Python package for Shack-Hartmann sensor simulation.
-    This package allows simulating the propagation of a beam through a microlens or microhole array
-    up to a virtual camera plane, then calculating local slopes and phase reconstruction.
+FR: Package Python pour la simulation complète de systèmes Shack-Hartmann.
+    
+    Structure du package :
+    - MathAndPhysicsTools.py : Fonctions outils mathématiques et physiques
+    - Beam.py : Génération et propagation de faisceaux
+    - Propagation.py : Propagation à travers des éléments optiques
+    - Optiques.py : Éléments optiques (lentilles, diaphragmes, etc.)
+    - Microstructure.py : Matrices de microlentilles
+    - Camera.py : Capteurs optiques (caméras)
+    - Shack_Hartmann.py : Capteur Shack-Hartmann
+    - Southwell.py : Reconstruction modale (algorithme de Southwell)
+    - Material_Behaviour.py : Comportement des matériaux (indice, thermique)
+    - Visualization.py : Fonctions de visualisation
+    - Simulation.py : Simulation complète
+    
+    Unités par défaut :
+    - Longueurs : mm
+    - Longueur d'onde : nm
+    - Phase : nm (principale), rad (pour les calculs)
 
-Structure du package/Package structure:
-- Beam.py: Génération et gestion des faisceaux optiques.
-- MathAndPhysicsTools.py: Fonctions mathématiques et physiques réutilisables.
-- Propagation.py: Propagation analytique ou numérique (FFT) des faisceaux.
-- Material_Behaviour.py: Gestion du chromatisme et des comportements thermiques.
-- Microstructure.py: Génération de matrices de microlentilles ou microtrous.
-- Optiques.py: Génération d'optiques (lentilles, beamsplitters, etc.).
-- Camera.py: Création de capteurs virtuels (parfaits ou réels).
-- Shack_Hartmann.py: Calcul des centroïdes et des pentes locales.
-- Southwell.py: Algorithmes de reconstruction de phase.
-- Visualization.py: Fonctions d'affichage.
-- Examples.py: Exemples d'utilisation.
-- Simulation.py: Simulation complète du Shack-Hartmann.
+EN: Python package for complete Shack-Hartmann system simulation.
+    
+    Package structure:
+    - MathAndPhysicsTools.py: Mathematical and physical utility functions
+    - Beam.py: Beam generation and propagation
+    - Propagation.py: Propagation through optical elements
+    - Optiques.py: Optical elements (lenses, diaphragms, etc.)
+    - Microstructure.py: Microlens arrays
+    - Camera.py: Optical sensors (cameras)
+    - Shack_Hartmann.py: Shack-Hartmann sensor
+    - Southwell.py: Modal reconstruction (Southwell algorithm)
+    - Material_Behaviour.py: Material behavior (refractive index, thermal)
+    - Visualization.py: Visualization functions
+    - Simulation.py: Complete simulation
+    
+    Default units:
+    - Lengths: mm
+    - Wavelength: nm
+    - Phase: nm (main), rad (for calculations)
 
-Author: FSA-FR
-Version: 0.1.0
+Author: Fabrice Sanson (FSA-FR)
 Repository: https://github.com/FSA-FR/SHFromScratch
+
+Dependencies:
+    - numpy (>=1.20.0)
+    - matplotlib (>=3.4.0)
+    - scipy (>=1.7.0, optional for advanced features)
 """
 
-__version__ = "0.1.0"
-__author__ = "FSA-FR"
+__version__ = "1.0.0"
+__author__ = "Fabrice Sanson"
+__email__ = "fsanson@imagine-optic.com"
+__license__ = "MIT"
 
-# Liste des modules à importer pour une utilisation directe
+
+# =============================================================================
+# IMPORTS PRINCIPAUX
+# =============================================================================
+
+# MathAndPhysicsTools
+from MathAndPhysicsTools import (
+    # Création de grilles
+    create_grid,
+    create_polar_grid,
+    cartesian_to_polar,
+    polar_to_cartesian,
+    
+    # Gestion des NaN
+    handle_nan,
+    safe_divide,
+    safe_sqrt,
+    safe_log,
+    safe_exp,
+    
+    # Statistiques
+    compute_pv_rms,
+    compute_statistics,
+    normalize_array,
+    
+    # Conversions d'unités
+    nm_to_rad,
+    rad_to_nm,
+    nm_to_lambda,
+    lambda_to_nm,
+    rad_to_mrad,
+    mrad_to_rad,
+    mm_to_um,
+    um_to_mm,
+    
+    # Génération de modes
+    generate_zernike_polynomial,
+    generate_zernike_modes,
+    generate_legendre_polynomial,
+    generate_hermite_polynomial,
+    generate_laguerre_polynomial,
+    
+    # Constantes
+    DEFAULT_WAVELENGTH_NM,
+    PI,
+    TWO_PI,
+    
+    # Enums
+    ZernikeOrdering,
+    NormalizationType
+)
+
+# Beam
+from Beam import (
+    Beam,
+    BeamProfile,
+    PropagationMethod,
+    create_beam
+)
+
+# Microstructure
+from Microstructure import (
+    MicrolensArray,
+    MicrolensShape,
+    ArrayType,
+    create_microlens_array
+)
+
+# Camera
+from Camera import (
+    Camera,
+    PerfectCamera,
+    CameraType,
+    SpectralResponse,
+    create_camera,
+    create_perfect_camera
+)
+
+# Shack_Hartmann
+from Shack_Hartmann import (
+    ShackHartmann,
+    Spot,
+    ReconstructionMethod,
+    CentroidMethod,
+    create_shack_hartmann
+)
+
+# Southwell
+from Southwell import (
+    SouthwellReconstructor,
+    reconstruct_wavefront_southwell
+)
+
+# Material_Behaviour
+from Material_Behaviour import (
+    Material,
+    MaterialDatabase,
+    MaterialCategory,
+    RefractiveIndexModel,
+    ThermalExpansionModel,
+    create_material,
+    create_material_database
+)
+
+# Optiques
+from Optiques import (
+    WaveFrontError,
+    OpticalElement,
+    Lens,
+    LensType,
+    Diaphragm,
+    ApertureShape,
+    Hole,
+    Grating,
+    GratingType,
+    OpticType,
+    create_lens,
+    create_diaphragm,
+    create_hole,
+    create_grating
+)
+
+# Propagation
+from Propagation import (
+    OpticalSystem,
+    PropagationMode,
+    propagate_through_lens,
+    propagate_through_free_space,
+    calculate_focal_spot
+)
+
+# Visualization
+from Visualization import (
+    display_2d_array,
+    display_phase,
+    display_intensity,
+    display_slopes,
+    display_error,
+    display_airy_spots,
+    display_reconstruction_results,
+    plot_error_vs_amplitude,
+    plot_zonal_vs_modal,
+    plot_individual_draws,
+    plot_error_histogram,
+    plot_comparison_histogram
+)
+
+# Simulation
+from Simulation import (
+    Simulation,
+    SimulationResult,
+    create_simulation
+)
+
+
+# =============================================================================
+# __all__
+# =============================================================================
+
 __all__ = [
-    "Beam",
-    "Propagation",
-    "Material_Behaviour",
-    "Microstructure",
-    "Optiques",
-    "Camera",
-    "Shack_Hartmann",
-    "Southwell",
-    "Visualization",
-    "MathAndPhysicsTools",
-    "Examples",
-    "Simulation",
+    # Version
+    '__version__',
+    '__author__',
+    '__email__',
+    '__license__',
+    
+    # Fonctions de création
+    'create_beam',
+    'create_microlens_array',
+    'create_shack_hartmann',
+    'create_simulation',
+    'create_camera',
+    'create_perfect_camera',
+    'create_lens',
+    'create_diaphragm',
+    'create_hole',
+    'create_grating',
+    'create_material',
+    'create_material_database',
+    
+    # Classes
+    'Beam',
+    'BeamProfile',
+    'PropagationMethod',
+    'MicrolensArray',
+    'MicrolensShape',
+    'ArrayType',
+    'Camera',
+    'PerfectCamera',
+    'CameraType',
+    'SpectralResponse',
+    'ShackHartmann',
+    'Spot',
+    'ReconstructionMethod',
+    'CentroidMethod',
+    'SouthwellReconstructor',
+    'Simulation',
+    'SimulationResult',
+    'WaveFrontError',
+    'OpticalElement',
+    'Lens',
+    'LensType',
+    'Diaphragm',
+    'ApertureShape',
+    'Hole',
+    'Grating',
+    'GratingType',
+    'OpticType',
+    'OpticalSystem',
+    'PropagationMode',
+    'Material',
+    'MaterialDatabase',
+    'MaterialCategory',
+    'RefractiveIndexModel',
+    'ThermalExpansionModel',
+    
+    # Fonctions de visualisation
+    'display_2d_array',
+    'display_phase',
+    'display_intensity',
+    'display_slopes',
+    'display_error',
+    'display_airy_spots',
+    'display_reconstruction_results',
+    'plot_error_vs_amplitude',
+    'plot_zonal_vs_modal',
+    'plot_individual_draws',
+    'plot_error_histogram',
+    'plot_comparison_histogram',
+    
+    # Fonctions outils
+    'create_grid',
+    'create_polar_grid',
+    'cartesian_to_polar',
+    'polar_to_cartesian',
+    'handle_nan',
+    'safe_divide',
+    'safe_sqrt',
+    'safe_log',
+    'safe_exp',
+    'compute_pv_rms',
+    'compute_statistics',
+    'normalize_array',
+    'nm_to_rad',
+    'rad_to_nm',
+    'nm_to_lambda',
+    'lambda_to_nm',
+    'rad_to_mrad',
+    'mrad_to_rad',
+    'mm_to_um',
+    'um_to_mm',
+    'generate_zernike_polynomial',
+    'generate_zernike_modes',
+    'generate_legendre_polynomial',
+    'generate_hermite_polynomial',
+    'generate_laguerre_polynomial',
+    
+    # Constantes
+    'DEFAULT_WAVELENGTH_NM',
+    'PI',
+    'TWO_PI',
+    'ZernikeOrdering',
+    'NormalizationType',
+    
+    # Fonctions de Propagation
+    'propagate_through_lens',
+    'propagate_through_free_space',
+    'calculate_focal_spot',
+    
+    # Fonction de reconstruction
+    'reconstruct_wavefront_southwell'
 ]
-
-# Import des modules principaux (seront ajoutés au fur et à mesure)
-from . import Beam
-from . import MathAndPhysicsTools
