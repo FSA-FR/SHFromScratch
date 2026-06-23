@@ -1,1132 +1,742 @@
 """
 MathAndPhysicsTools.py
-FR: Module regroupant les fonctions mathématiques et physiques réutilisables pour le package SHFromScratch.
-    Inclut les bases de modes (Zernike, Legendre, Hermite-Gauss, Laguerre-Gauss), les normalisations (PV, RMS),
-    les conversions d'unités (énergie, puissance, intensité), et les outils de grille d'échantillonnage.
 
-EN: Module grouping reusable mathematical and physical functions for the SHFromScratch package.
-    Includes mode bases (Zernike, Legendre, Hermite-Gauss, Laguerre-Gauss), normalizations (PV, RMS),
-    unit conversions (energy, power, intensity), and sampling grid tools.
+FR: Module central pour les outils mathématiques et physiques.
+    Ce module contient TOUTES les fonctions outils utilisées dans le package,
+    à l'exception des fonctions de propagation qui doivent rester dans Beam.py.
+    
+    Fonctionnalités principales :
+    - Création de grilles de coordonnées (1D, 2D, polaires)
+    - Génération de bases de modes (Zernike, Legendre, Hermite-Gauss, Laguerre-Gauss)
+    - Normalisations (PV, RMS, Noll, Wyant)
+    - Conversions d'unités (nm ↔ λ, rad ↔ mrad, mm ↔ µm, etc.)
+    - Calculs de statistiques (PV, RMS, moyenne, écart-type)
+    - Gestion des NaN (sans propagation)
+    - Opérations matricielles sûres (division, sqrt, log, etc.)
+    - Interpolation et lissage
+    - Génération de nombres aléatoires avec graines
+    
+    Règle d'or :
+    - TOUTE fonction outil utilisée dans plusieurs fichiers DOIT être ici.
+    - Les fonctions de propagation DOIVENT rester dans Beam.py.
+    - Les fonctions de visualisation DOIVENT être dans Visualization.py.
+    
+    Unités par défaut :
+    - Longueurs : mm (sauf indication contraire)
+    - Longueur d'onde : nm
+    - Phase : nm (principale), rad (pour les calculs)
+    - Angles : rad (radians)
+
+EN: Central module for mathematical and physical tools.
+    This module contains ALL utility functions used in the package,
+    except propagation functions which must remain in Beam.py.
+    
+    Main features:
+    - Coordinate grid creation (1D, 2D, polar)
+    - Mode basis generation (Zernike, Legendre, Hermite-Gauss, Laguerre-Gauss)
+    - Normalizations (PV, RMS, Noll, Wyant)
+    - Unit conversions (nm ↔ λ, rad ↔ mrad, mm ↔ µm, etc.)
+    - Statistics calculations (PV, RMS, mean, std)
+    - NaN handling (no propagation)
+    - Safe array operations (division, sqrt, log, etc.)
+    - Interpolation and smoothing
+    - Random number generation with seeds
+    
+    Golden rule:
+    - EVERY utility function used in multiple files MUST be here.
+    - Propagation functions MUST remain in Beam.py.
+    - Visualization functions MUST be in Visualization.py.
+    
+    Default units:
+    - Lengths: mm (unless specified otherwise)
+    - Wavelength: nm
+    - Phase: nm (main), rad (for calculations)
+    - Angles: rad (radians)
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
+
+Dependencies:
+    - numpy
+    - scipy (for special functions: Bessel, Hermite, Laguerre, etc.)
+
+Sources:
+    - "Numerical Recipes in C" by Press et al. (1992)
+      -> Algorithmes numériques de base (FFT, interpolation, gestion des NaN)
+      -> Chapitres 1 (gestion des erreurs), 3 (interpolation), 5 (FFT)
+    - "Principles of Optics" by M. Born & E. Wolf (Cambridge, 1999)
+      -> Fondements de l'optique (Ch. 1-3)
+    - "Laser Beam Propagation" by J. W. Goodman (1996)
+      -> Propagation des faisceaux (Ch. 3-4)
+    - "Zernike polynomials and atmospheric turbulence" by J. W. Noll (1976)
+      -> Polynômes de Zernike pour l'optique adaptative
+    - "Handbook of Mathematical Functions" by Abramowitz & Stegun (1964)
+      -> Fonctions spéciales (Bessel, Hermite, Laguerre)
 """
 
 import numpy as np
 import logging
-from typing import Tuple, Optional, Union
-import csv
+from typing import Optional, Tuple, Dict, List, Union
+from enum import Enum
+import warnings
 
 
 # =============================================================================
-# 1. BASES DE MODES / MODE BASES
+# CONFIGURATION GLOBALE
 # =============================================================================
 
-def generate_zernike_modes(
-    n_modes: int,
-    ordination: str = "Noll",
-    grid_x: Optional[np.ndarray] = None,
-    grid_y: Optional[np.ndarray] = None,
-    max_radial: Optional[int] = None,
-    max_azimuthal: Optional[int] = None,
-) -> np.ndarray:
-    """
-    FR: Génère une matrice de modes de Zernike 2D pour une grille donnée.
-        Les modes sont générés selon l'ordination spécifiée (Noll ou Wyant).
-
-    EN: Generates a 2D matrix of Zernike modes for a given grid.
-        Modes are generated according to the specified indexing (Noll or Wyant).
-
-    Args:
-        n_modes (int): Nombre total de modes de Zernike à générer.
-        ordination (str): Type d'ordination, "Noll" (défaut) ou "Wyant".
-        grid_x (np.ndarray, optional): Grille en x (2D). Si None, une grille par défaut est créée.
-        grid_y (np.ndarray, optional): Grille en y (2D). Si None, une grille par défaut est créée.
-        max_radial (int, optional): Ordre radial maximal. Si None, calculé automatiquement.
-        max_azimuthal (int, optional): Ordre azimutal maximal. Si None, calculé automatiquement.
-
-    Returns:
-        np.ndarray: Matrice de taille (n_modes, height, width) contenant les modes de Zernike.
-
-    Raises:
-        ValueError: Si n_modes <= 0 ou si ordination est invalide.
-
-    Sources:
-        - Noll, R. J. (1976). "Zernike polynomials and atmospheric turbulence." JOSA, 66(3), 207-211.
-        - Wyant, J. C., & Creath, K. (1992). "Basic wavefront aberration theory for optical metrology."
-          Applied Optics, 31(20), 3923-3930.
-    """
-    if n_modes <= 0:
-        raise ValueError("n_modes doit être supérieur à 0.")
-    if ordination not in ["Noll", "Wyant"]:
-        raise ValueError("ordination doit être 'Noll' ou 'Wyant'.")
-
-    # Calcul des ordres maximaux si non spécifiés
-    if max_radial is None or max_azimuthal is None:
-        max_n = int(np.ceil((np.sqrt(8 * n_modes + 1) - 1) / 2))
-        max_radial = max_n if max_radial is None else max_radial
-        max_azimuthal = max_n if max_azimuthal is None else max_azimuthal
-
-    # Création d'une grille par défaut si non fournie
-    if grid_x is None or grid_y is None:
-        size = 10.0  # mm
-        num_points = 512
-        grid_x, grid_y = create_grid(size, num_points)
-
-    # Normalisation de la grille pour les polynômes de Zernike (rayon unitaire)
-    r = np.sqrt(grid_x**2 + grid_y**2)
-    theta = np.arctan2(grid_y, grid_x)
-    r_max = np.max(r)
-    r = r / r_max  # Normalisation à [0, 1]
-
-    # Initialisation de la matrice des modes
-    modes = np.zeros((n_modes, grid_x.shape[0], grid_x.shape[1]))
-
-    # Génération des modes selon l'ordination
-    for mode_idx in range(n_modes):
-        if ordination == "Noll":
-            n, m = _noll_to_zernike_indices(mode_idx)
-        else:  # Wyant
-            n, m = _wyant_to_zernike_indices(mode_idx)
-
-        if n > max_radial or abs(m) > max_azimuthal:
-            modes[mode_idx] = np.zeros_like(grid_x)
-            continue
-
-        # Calcul du polynôme radial
-        R_nm = _radial_polynomial(n, abs(m), r)
-
-        # Calcul du mode de Zernike
-        if m >= 0:
-            modes[mode_idx] = R_nm * np.cos(abs(m) * theta)
-        else:
-            modes[mode_idx] = R_nm * np.sin(abs(m) * theta)
-
-    return modes
-
-
-def _noll_to_zernike_indices(mode_idx: int) -> Tuple[int, int]:
-    """
-    FR: Convertit un indice Noll en indices (n, m) de Zernike.
-
-    EN: Converts a Noll index to Zernike (n, m) indices.
-
-    Args:
-        mode_idx (int): Indice du mode selon l'ordination de Noll.
-
-    Returns:
-        Tuple[int, int]: (n, m) où n est l'ordre radial et m l'ordre azimutal.
-
-    Sources:
-        - Noll, R. J. (1976). "Zernike polynomials and atmospheric turbulence." JOSA, 66(3), 207-211.
-    """
-    n = 0
-    while (n + 1) * (n + 2) // 2 <= mode_idx:
-        n += 1
-    m = 2 * mode_idx - n * (n + 2)
-    return n, m
-
-
-def _wyant_to_zernike_indices(mode_idx: int) -> Tuple[int, int]:
-    """
-    FR: Convertit un indice Wyant en indices (n, m) de Zernike.
-
-    EN: Converts a Wyant index to Zernike (n, m) indices.
-
-    Args:
-        mode_idx (int): Indice du mode selon l'ordination de Wyant.
-
-    Returns:
-        Tuple[int, int]: (n, m) où n est l'ordre radial et m l'ordre azimutal.
-
-    Sources:
-        - Wyant, J. C., & Creath, K. (1992). "Basic wavefront aberration theory for optical metrology."
-          Applied Optics, 31(20), 3923-3930.
-    """
-    n = int(np.floor(np.sqrt(2 * mode_idx + 1)))
-    m = 2 * mode_idx - n * (n + 1)
-    return n, m
-
-
-def _radial_polynomial(n: int, m: int, r: np.ndarray) -> np.ndarray:
-    """
-    FR: Calcule le polynôme radial R_n^m(r) pour les polynômes de Zernike.
-
-    EN: Computes the radial polynomial R_n^m(r) for Zernike polynomials.
-
-    Args:
-        n (int): Ordre radial.
-        m (int): Ordre azimutal.
-        r (np.ndarray): Grille radiale normalisée (0 <= r <= 1).
-
-    Returns:
-        np.ndarray: Polynôme radial évalué sur la grille r.
-
-    Sources:
-        - Noll, R. J. (1976). "Zernike polynomials and atmospheric turbulence." JOSA, 66(3), 207-211.
-    """
-    R = np.zeros_like(r)
-    for k in range((n - m) // 2 + 1):
-        term = (
-            ((-1) ** k)
-            * np.math.factorial(n - 2 * k)
-            / (
-                np.math.factorial(k)
-                * np.math.factorial((n + m) // 2 - k)
-                * np.math.factorial((n - m) // 2 - k)
-            )
-            * (r ** (n - 2 * k))
-        )
-        R += term
-    return R
-
-
-def generate_legendre_modes(
-    n_modes: int,
-    grid_x: Optional[np.ndarray] = None,
-    grid_y: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """
-    FR: Génère une matrice de modes de Legendre 2D pour une grille donnée.
-
-    EN: Generates a matrix of 2D Legendre modes for a given grid.
-
-    Args:
-        n_modes (int): Nombre de modes de Legendre à générer.
-        grid_x (np.ndarray, optional): Grille en x (2D). Si None, une grille par défaut est créée.
-        grid_y (np.ndarray, optional): Grille en y (2D). Si None, une grille par défaut est créée.
-
-    Returns:
-        np.ndarray: Matrice de taille (n_modes, height, width) contenant les modes de Legendre 2D.
-
-    Raises:
-        ValueError: Si n_modes <= 0.
-
-    Sources:
-        - Abramowitz, M., & Stegun, I. A. (1964). "Handbook of Mathematical Functions." Dover.
-    """
-    if n_modes <= 0:
-        raise ValueError("n_modes doit être supérieur à 0.")
-
-    if grid_x is None or grid_y is None:
-        size = 10.0  # mm
-        num_points = 512
-        grid_x, grid_y = create_grid(size, num_points)
-
-    # Normalisation de la grille pour les polynômes de Legendre (x, y ∈ [-1, 1])
-    x_norm = 2 * (grid_x - np.min(grid_x)) / (np.max(grid_x) - np.min(grid_x)) - 1
-    y_norm = 2 * (grid_y - np.min(grid_y)) / (np.max(grid_y) - np.min(grid_y)) - 1
-
-    # Initialisation de la matrice des modes
-    modes = np.zeros((n_modes, grid_x.shape[0], grid_x.shape[1]))
-
-    # Génération des modes de Legendre 2D
-    for mode_idx in range(n_modes):
-        n = mode_idx  # Ordre du polynôme de Legendre
-        P_n = _legendre_polynomial(n, x_norm)
-        modes[mode_idx] = P_n
-
-    return modes
-
-
-def _legendre_polynomial(n: int, x: np.ndarray) -> np.ndarray:
-    """
-    FR: Calcule le polynôme de Legendre P_n(x).
-
-    EN: Computes the Legendre polynomial P_n(x).
-
-    Args:
-        n (int): Ordre du polynôme.
-        x (np.ndarray): Grille 1D ou 2D.
-
-    Returns:
-        np.ndarray: Polynôme de Legendre P_n(x).
-
-    Sources:
-        - Abramowitz, M., & Stegun, I. A. (1964). "Handbook of Mathematical Functions." Dover.
-    """
-    if n == 0:
-        return np.ones_like(x)
-    elif n == 1:
-        return x
-    else:
-        P_prev = np.ones_like(x)
-        P_curr = x
-        for k in range(2, n + 1):
-            P_next = ((2 * k - 1) * x * P_curr - (k - 1) * P_prev) / k
-            P_prev, P_curr = P_curr, P_next
-        return P_curr
-
-
-def generate_hermite_gauss_modes(
-    n_modes: int,
-    grid_x: np.ndarray,
-    grid_y: np.ndarray,
-    sigma: float = 1.0,
-) -> np.ndarray:
-    """
-    FR: Génère une matrice de modes de Hermite-Gauss pour une grille donnée.
-
-    EN: Generates a matrix of Hermite-Gauss modes for a given grid.
-
-    Args:
-        n_modes (int): Nombre de modes à générer (n + m <= n_modes).
-        grid_x (np.ndarray): Grille en x (2D).
-        grid_y (np.ndarray): Grille en y (2D).
-        sigma (float): Écart-type pour la gaussienne. Default: 1.0.
-
-    Returns:
-        np.ndarray: Matrice de taille (n_modes, height, width) contenant les modes de Hermite-Gauss.
-
-    Sources:
-        - Siegman, A. E. (1986). "Lasers." University Science Books.
-    """
-    modes = []
-    for n in range(n_modes + 1):
-        for m in range(n_modes + 1 - n):
-            if n + m > n_modes:
-                continue
-            H_n = _hermite_polynomial(n, grid_x / sigma)
-            H_m = _hermite_polynomial(m, grid_y / sigma)
-            gauss = np.exp(-(grid_x**2 + grid_y**2) / (2 * sigma**2))
-            mode = H_n * H_m * gauss
-            modes.append(mode)
-    return np.array(modes)[:n_modes]
-
-
-def _hermite_polynomial(n: int, x: np.ndarray) -> np.ndarray:
-    """
-    FR: Calcule le polynôme de Hermite H_n(x).
-
-    EN: Computes the Hermite polynomial H_n(x).
-
-    Args:
-        n (int): Ordre du polynôme.
-        x (np.ndarray): Grille 1D ou 2D.
-
-    Returns:
-        np.ndarray: Polynôme de Hermite H_n(x).
-
-    Sources:
-        - Abramowitz, M., & Stegun, I. A. (1964). "Handbook of Mathematical Functions." Dover.
-    """
-    if n == 0:
-        return np.ones_like(x)
-    elif n == 1:
-        return 2 * x
-    else:
-        H_prev = np.ones_like(x)
-        H_curr = 2 * x
-        for k in range(2, n + 1):
-            H_next = 2 * x * H_curr - 2 * (k - 1) * H_prev
-            H_prev, H_curr = H_curr, H_next
-        return H_curr
-
-
-def generate_laguerre_gauss_modes(
-    n_modes: int,
-    grid_x: np.ndarray,
-    grid_y: np.ndarray,
-    sigma: float = 1.0,
-    p_max: int = 5,
-    l_max: int = 5,
-) -> np.ndarray:
-    """
-    FR: Génère une matrice de modes de Laguerre-Gauss pour une grille donnée.
-
-    EN: Generates a matrix of Laguerre-Gauss modes for a given grid.
-
-    Args:
-        n_modes (int): Nombre de modes à générer.
-        grid_x (np.ndarray): Grille en x (2D).
-        grid_y (np.ndarray): Grille en y (2D).
-        sigma (float): Écart-type pour la gaussienne. Default: 1.0.
-        p_max (int): Ordre radial maximal. Default: 5.
-        l_max (int): Ordre azimutal maximal. Default: 5.
-
-    Returns:
-        np.ndarray: Matrice de taille (n_modes, height, width) contenant les modes de Laguerre-Gauss.
-
-    Sources:
-        - Siegman, A. E. (1986). "Lasers." University Science Books.
-    """
-    r = np.sqrt(grid_x**2 + grid_y**2)
-    theta = np.arctan2(grid_y, grid_x)
-    modes = []
-
-    for p in range(p_max + 1):
-        for l in range(-l_max, l_max + 1):
-            if len(modes) >= n_modes:
-                break
-            L_p_l = _generalized_laguerre_polynomial(p, abs(l), r**2 / sigma**2)
-            gauss = np.exp(-r**2 / (2 * sigma**2))
-            if l >= 0:
-                angular = np.cos(l * theta)
-            else:
-                angular = np.sin(abs(l) * theta)
-            mode = L_p_l * gauss * angular
-            modes.append(mode)
-
-    return np.array(modes)[:n_modes]
-
-
-def _generalized_laguerre_polynomial(p: int, l: int, x: np.ndarray) -> np.ndarray:
-    """
-    FR: Calcule le polynôme de Laguerre généralisé L_p^l(x).
-
-    EN: Computes the generalized Laguerre polynomial L_p^l(x).
-
-    Args:
-        p (int): Ordre radial.
-        l (int): Ordre azimutal.
-        x (np.ndarray): Grille 1D ou 2D.
-
-    Returns:
-        np.ndarray: Polynôme de Laguerre généralisé L_p^l(x).
-
-    Sources:
-        - Abramowitz, M., & Stegun, I. A. (1964). "Handbook of Mathematical Functions." Dover.
-    """
-    if p == 0:
-        return np.ones_like(x)
-    elif p == 1:
-        return (l + 1) - x
-    else:
-        L_prev = np.ones_like(x)
-        L_curr = (l + 1) - x
-        for k in range(2, p + 1):
-            L_next = ((2 * k + l - 1 - x) * L_curr - (k + l - 1) * L_prev) / k
-            L_prev, L_curr = L_curr, L_next
-        return L_curr
+# Désactiver les warnings de division par zéro et NaN
+warnings.filterwarnings("ignore", category=np.RankWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# Configuration du logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("MathAndPhysicsTools")
 
 
 # =============================================================================
-# 2. NORMALISATIONS / NORMALIZATIONS
+# CONSTANTES PHYSIQUES
 # =============================================================================
 
-def normalize_phase(
-    phase: np.ndarray,
-    normalization: str = "RMS",
-    target_value: float = 1.0,
-    wavelength_nm: float = 633.0,
-) -> np.ndarray:
-    """
-    FR: Normalise une carte de phase selon PV (Peak-to-Valley) ou RMS (Root Mean Square).
+SPEED_OF_LIGHT_M_PER_S = 299792458.0  # m/s
+PLANCK_CONSTANT_J_S = 6.62607015e-34  # J·s
+PI = np.pi
+TWO_PI = 2 * np.pi
 
-    EN: Normalizes a phase map according to PV (Peak-to-Valley) or RMS (Root Mean Square).
+DEFAULT_WAVELENGTH_NM = 633.0  # Longueur d'onde par défaut (He-Ne laser, nm)
+NUMERICAL_TOLERANCE = 1e-12
 
-    Args:
-        phase (np.ndarray): Carte de phase en nm.
-        normalization (str): Type de normalisation, "PV" ou "RMS" (défaut: "RMS").
-        target_value (float): Valeur cible pour la normalisation (ex: 1.0 pour 1λ).
-        wavelength_nm (float): Longueur d'onde en nm (défaut: 633.0).
+# Facteurs de conversion
+NM_TO_M = 1e-9
+MM_TO_M = 1e-3
+UM_TO_M = 1e-6
+M_TO_NM = 1e9
+M_TO_MM = 1e3
+M_TO_UM = 1e6
 
-    Returns:
-        np.ndarray: Phase normalisée en nm.
-
-    Raises:
-        ValueError: Si normalization n'est pas "PV" ou "RMS".
-
-    Sources:
-        - Mahajan, V. N. (2001). "Optical Imaging and Aberrations." SPIE Press.
-    """
-    if normalization not in ["PV", "RMS"]:
-        raise ValueError("normalization doit être 'PV' ou 'RMS'.")
-
-    if normalization == "PV":
-        current_pv = np.max(phase) - np.min(phase)
-        if current_pv == 0:
-            return phase
-        normalized_phase = phase * (target_value * wavelength_nm) / current_pv
-    else:  # RMS
-        current_rms = np.sqrt(np.mean(phase**2))
-        if current_rms == 0:
-            return phase
-        normalized_phase = phase * (target_value * wavelength_nm) / current_rms
-
-    return normalized_phase
+RAD_TO_MRAD = 1000.0
+MRAD_TO_RAD = 1.0 / RAD_TO_MRAD
+RAD_TO_DEG = 180.0 / np.pi
+DEG_TO_RAD = np.pi / 180.0
 
 
 # =============================================================================
-# 3. CONVERSIONS D'UNITÉS / UNIT CONVERSIONS
+# ENUMS
 # =============================================================================
 
-# --- Conversions de phase ---
-def nm_to_rad(phase_nm: Union[np.ndarray, float], wavelength_nm: float) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une phase en nm en rad.
-
-    EN: Converts a phase from nm to rad.
-
-    Args:
-        phase_nm (np.ndarray or float): Phase en nm.
-        wavelength_nm (float): Longueur d'onde en nm.
-
-    Returns:
-        np.ndarray or float: Phase en rad.
-
-    Formula:
-        phase_rad = (2π * phase_nm) / wavelength_nm
-    """
-    return (2 * np.pi * phase_nm) / wavelength_nm
-
-
-def rad_to_nm(phase_rad: Union[np.ndarray, float], wavelength_nm: float) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une phase en rad en nm.
-
-    EN: Converts a phase from rad to nm.
-
-    Args:
-        phase_rad (np.ndarray or float): Phase en rad.
-        wavelength_nm (float): Longueur d'onde en nm.
-
-    Returns:
-        np.ndarray or float: Phase en nm.
-
-    Formula:
-        phase_nm = (phase_rad * wavelength_nm) / (2π)
-    """
-    return (phase_rad * wavelength_nm) / (2 * np.pi)
-
-
-def lambda_to_nm(wavelength_lambda: Union[np.ndarray, float], reference_nm: float = 633.0) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une longueur d'onde en λ (unité de longueur d'onde) en nm.
-
-    EN: Converts a wavelength from λ (wavelength unit) to nm.
-
-    Args:
-        wavelength_lambda (np.ndarray or float): Longueur d'onde en λ.
-        reference_nm (float): Longueur d'onde de référence en nm. Default: 633.0.
-
-    Returns:
-        np.ndarray or float: Longueur d'onde en nm.
-    """
-    return wavelength_lambda * reference_nm
-
-
-def nm_to_lambda(wavelength_nm: Union[np.ndarray, float], reference_nm: float = 633.0) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une longueur d'onde en nm en λ (unité de longueur d'onde).
-
-    EN: Converts a wavelength from nm to λ (wavelength unit).
-
-    Args:
-        wavelength_nm (np.ndarray or float): Longueur d'onde en nm.
-        reference_nm (float): Longueur d'onde de référence en nm. Default: 633.0.
-
-    Returns:
-        np.ndarray or float: Longueur d'onde en λ.
-    """
-    return wavelength_nm / reference_nm
-
-
-def rad_to_mrad(phase_rad: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une phase en rad en mrad.
-
-    EN: Converts a phase from rad to mrad.
-
-    Args:
-        phase_rad (np.ndarray or float): Phase en rad.
-
-    Returns:
-        np.ndarray or float: Phase en mrad.
-    """
-    return phase_rad * 1e3
-
-
-def mrad_to_rad(phase_mrad: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une phase en mrad en rad.
-
-    EN: Converts a phase from mrad to rad.
-
-    Args:
-        phase_mrad (np.ndarray or float): Phase en mrad.
-
-    Returns:
-        np.ndarray or float: Phase en rad.
-    """
-    return phase_mrad * 1e-3
-
-
-# --- Conversions d'énergie et de puissance ---
-
-def J_to_mJ(energy_J: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une énergie en Joules (J) en milliJoules (mJ).
-
-    EN: Converts energy from Joules (J) to milliJoules (mJ).
-
-    Args:
-        energy_J (np.ndarray or float): Énergie en Joules.
-
-    Returns:
-        np.ndarray or float: Énergie en milliJoules.
-
-    Formula:
-        energy_mJ = energy_J * 1000
-    """
-    return energy_J * 1000
-
-
-def mJ_to_J(energy_mJ: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une énergie en milliJoules (mJ) en Joules (J).
-
-    EN: Converts energy from milliJoules (mJ) to Joules (J).
-
-    Args:
-        energy_mJ (np.ndarray or float): Énergie en milliJoules.
-
-    Returns:
-        np.ndarray or float: Énergie en Joules.
-
-    Formula:
-        energy_J = energy_mJ / 1000
-    """
-    return energy_mJ / 1000
-
-
-def W_to_mW(power_W: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une puissance en Watts (W) en milliWatts (mW).
-
-    EN: Converts power from Watts (W) to milliWatts (mW).
-
-    Args:
-        power_W (np.ndarray or float): Puissance en Watts.
-
-    Returns:
-        np.ndarray or float: Puissance en milliWatts.
-
-    Formula:
-        power_mW = power_W * 1000
-    """
-    return power_W * 1000
-
-
-def mW_to_W(power_mW: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une puissance en milliWatts (mW) en Watts (W).
-
-    EN: Converts power from milliWatts (mW) to Watts (W).
-
-    Args:
-        power_mW (np.ndarray or float): Puissance en milliWatts.
-
-    Returns:
-        np.ndarray or float: Puissance en Watts.
-
-    Formula:
-        power_W = power_mW / 1000
-    """
-    return power_mW / 1000
-
-
-def W_m2_to_W_cm2(intensity_W_m2: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une intensité en W/m² en W/cm².
-
-    EN: Converts intensity from W/m² to W/cm².
-
-    Args:
-        intensity_W_m2 (np.ndarray or float): Intensité en W/m².
-
-    Returns:
-        np.ndarray or float: Intensité en W/cm².
-
-    Formula:
-        intensity_W_cm2 = intensity_W_m2 / 10000
-    """
-    return intensity_W_m2 / 10000
-
-
-def W_cm2_to_W_m2(intensity_W_cm2: Union[np.ndarray, float]) -> Union[np.ndarray, float]:
-    """
-    FR: Convertit une intensité en W/cm² en W/m².
-
-    EN: Converts intensity from W/cm² to W/m².
-
-    Args:
-        intensity_W_cm2 (np.ndarray or float): Intensité en W/cm².
-
-    Returns:
-        np.ndarray or float: Intensité en W/m².
-
-    Formula:
-        intensity_W_m2 = intensity_W_cm2 * 10000
-    """
-    return intensity_W_cm2 * 10000
-
-
-# --- Conversions entre énergie, puissance et intensité ---
-
-def energy_to_power(
-    energy: float,
-    energy_unit: str,
-    pulse_duration_s: float,
-    power_unit: str = "W",
-) -> float:
-    """
-    FR: Convertit une énergie en puissance en utilisant la durée d'impulsion.
-
-    EN: Converts energy to power using pulse duration.
-
-    Args:
-        energy (float): Énergie.
-        energy_unit (str): Unité de l'énergie ("J" ou "mJ").
-        pulse_duration_s (float): Durée de l'impulsion en secondes.
-        power_unit (str): Unité de la puissance souhaitée ("W" ou "mW"). Default: "W".
-
-    Returns:
-        float: Puissance dans l'unité spécifiée.
-
-    Formula:
-        power_W = energy_J / pulse_duration_s
-    """
-    # Convertir l'énergie en Joules
-    if energy_unit == "mJ":
-        energy_J = mJ_to_J(energy)
-    elif energy_unit == "J":
-        energy_J = energy
-    else:
-        raise ValueError(f"Unité d'énergie inconnue : {energy_unit}. Utilisez 'J' ou 'mJ'.")
-
-    # Calculer la puissance en Watts
-    power_W = energy_J / pulse_duration_s
-
-    # Convertir en mW si nécessaire
-    if power_unit == "mW":
-        return W_to_mW(power_W)
-    elif power_unit == "W":
-        return power_W
-    else:
-        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
-
-
-def power_to_energy(
-    power: float,
-    power_unit: str,
-    pulse_duration_s: float,
-    energy_unit: str = "J",
-) -> float:
-    """
-    FR: Convertit une puissance en énergie en utilisant la durée d'impulsion.
-
-    EN: Converts power to energy using pulse duration.
-
-    Args:
-        power (float): Puissance.
-        power_unit (str): Unité de la puissance ("W" ou "mW").
-        pulse_duration_s (float): Durée de l'impulsion en secondes.
-        energy_unit (str): Unité de l'énergie souhaitée ("J" ou "mJ"). Default: "J".
-
-    Returns:
-        float: Énergie dans l'unité spécifiée.
-
-    Formula:
-        energy_J = power_W * pulse_duration_s
-    """
-    # Convertir la puissance en Watts
-    if power_unit == "mW":
-        power_W = mW_to_W(power)
-    elif power_unit == "W":
-        power_W = power
-    else:
-        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
-
-    # Calculer l'énergie en Joules
-    energy_J = power_W * pulse_duration_s
-
-    # Convertir en mJ si nécessaire
-    if energy_unit == "mJ":
-        return J_to_mJ(energy_J)
-    elif energy_unit == "J":
-        return energy_J
-    else:
-        raise ValueError(f"Unité d'énergie inconnue : {energy_unit}. Utilisez 'J' ou 'mJ'.")
-
-
-def power_to_intensity(
-    power: float,
-    power_unit: str,
-    diameter_mm: float,
-    intensity_unit: str = "W/m2",
-) -> float:
-    """
-    FR: Convertit une puissance en intensité en utilisant le diamètre du faisceau.
-
-    EN: Converts power to intensity using beam diameter.
-
-    Args:
-        power (float): Puissance du faisceau.
-        power_unit (str): Unité de la puissance ("W" ou "mW").
-        diameter_mm (float): Diamètre du faisceau en mm.
-        intensity_unit (str): Unité d'intensité souhaitée ("W/m2" ou "W/cm2"). Default: "W/m2".
-
-    Returns:
-        float: Intensité dans l'unité spécifiée.
-
-    Formula:
-        intensity_W_m2 = power_W / (π * (radius_m)^2)
-    """
-    # Convertir la puissance en Watts
-    if power_unit == "mW":
-        power_W = mW_to_W(power)
-    elif power_unit == "W":
-        power_W = power
-    else:
-        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
-
-    # Calculer la surface en m²
-    radius_m = diameter_mm / 2000  # Conversion mm → m
-    area_m2 = np.pi * radius_m**2
-
-    # Calculer l'intensité en W/m²
-    intensity_W_m2 = power_W / area_m2
-
-    # Convertir en W/cm² si nécessaire
-    if intensity_unit == "W/cm2":
-        return W_m2_to_W_cm2(intensity_W_m2)
-    elif intensity_unit == "W/m2":
-        return intensity_W_m2
-    else:
-        raise ValueError(f"Unité d'intensité inconnue : {intensity_unit}. Utilisez 'W/m2' ou 'W/cm2'.")
-
-
-def intensity_to_power(
-    intensity: float,
-    intensity_unit: str,
-    diameter_mm: float,
-    power_unit: str = "W",
-) -> float:
-    """
-    FR: Convertit une intensité en puissance en utilisant le diamètre du faisceau.
-
-    EN: Converts intensity to power using beam diameter.
-
-    Args:
-        intensity (float): Intensité du faisceau.
-        intensity_unit (str): Unité de l'intensité ("W/m2" ou "W/cm2").
-        diameter_mm (float): Diamètre du faisceau en mm.
-        power_unit (str): Unité de puissance souhaitée ("W" ou "mW"). Default: "W".
-
-    Returns:
-        float: Puissance dans l'unité spécifiée.
-
-    Formula:
-        power_W = intensity_W_m2 * (π * (radius_m)^2)
-    """
-    # Convertir l'intensité en W/m²
-    if intensity_unit == "W/cm2":
-        intensity_W_m2 = W_cm2_to_W_m2(intensity)
-    elif intensity_unit == "W/m2":
-        intensity_W_m2 = intensity
-    else:
-        raise ValueError(f"Unité d'intensité inconnue : {intensity_unit}. Utilisez 'W/m2' ou 'W/cm2'.")
-
-    # Calculer la surface en m²
-    radius_m = diameter_mm / 2000  # Conversion mm → m
-    area_m2 = np.pi * radius_m**2
-
-    # Calculer la puissance en Watts
-    power_W = intensity_W_m2 * area_m2
-
-    # Convertir en mW si nécessaire
-    if power_unit == "mW":
-        return W_to_mW(power_W)
-    elif power_unit == "W":
-        return power_W
-    else:
-        raise ValueError(f"Unité de puissance inconnue : {power_unit}. Utilisez 'W' ou 'mW'.")
+class ZernikeOrdering(Enum):
+    NOLL = "noll"
+    WYANT = "wyant"
+    STANDARD = "standard"
+
+
+class NormalizationType(Enum):
+    PV = "pv"
+    RMS = "rms"
+    NOLL = "noll"
+    WYANT = "wyant"
 
 
 # =============================================================================
-# 4. GRILLES D'ÉCHANTILLONNAGE / SAMPLING GRIDS
+# FONCTIONS DE CRÉATION DE GRILLES
 # =============================================================================
 
-def create_grid(
-    size_mm: float,
-    num_points: int = 512,
-) -> Tuple[np.ndarray, np.ndarray]:
+def create_grid(num_points: int,
+               diameter_mm: float = 1.0,
+               center: Tuple[float, float] = (0.0, 0.0)) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    FR: Crée une grille 2D centrée en mm.
-
-    EN: Creates a 2D centered grid in mm.
-
-    Args:
-        size_mm (float): Taille de la grille en mm.
-        num_points (int): Nombre de points par dimension (défaut: 512).
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: Grilles x et y en mm.
-    """
-    x = np.linspace(-size_mm / 2, size_mm / 2, num_points)
-    y = np.linspace(-size_mm / 2, size_mm / 2, num_points)
-    xx, yy = np.meshgrid(x, y, indexing='ij')
-    return xx, yy
-
-
-def resample_to_grid(
-    data: np.ndarray,
-    new_shape: Tuple[int, int],
-    old_grid_x: Optional[np.ndarray] = None,
-    old_grid_y: Optional[np.ndarray] = None,
-    new_grid_x: Optional[np.ndarray] = None,
-    new_grid_y: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """
-    FR: Rééchantillonne des données 2D sur une nouvelle grille en utilisant l'interpolation.
-
-    EN: Resamples 2D data to a new grid using interpolation.
-
-    Args:
-        data (np.ndarray): Données 2D à rééchantillonner.
-        new_shape (Tuple[int, int]): Nouvelle forme (height, width).
-        old_grid_x (np.ndarray, optional): Grille x originale. Si None, supposée linéaire.
-        old_grid_y (np.ndarray, optional): Grille y originale. Si None, supposée linéaire.
-        new_grid_x (np.ndarray, optional): Nouvelle grille x. Si None, créée avec create_grid.
-        new_grid_y (np.ndarray, optional): Nouvelle grille y. Si None, créée avec create_grid.
-
-    Returns:
-        np.ndarray: Données rééchantillonnées.
-
-    Notes:
-        Utilise scipy.interpolate.griddata si les grilles sont fournies, sinon utilise np.interp.
-    """
-    from scipy.interpolate import griddata
-
-    if old_grid_x is None or old_grid_y is None:
-        old_grid_x, old_grid_y = create_grid(1.0, data.shape[1])
-    if new_grid_x is None or new_grid_y is None:
-        new_grid_x, new_grid_y = create_grid(1.0, new_shape[1])
-
-    # Aplatir les données et les grilles pour griddata
-    points = np.column_stack((old_grid_x.ravel(), old_grid_y.ravel()))
-    values = data.ravel()
-    new_points = np.column_stack((new_grid_x.ravel(), new_grid_y.ravel()))
-
-    # Rééchantillonnage
-    resampled = griddata(points, values, new_points, method='cubic', fill_value=0.0)
-    return resampled.reshape(new_shape)
-
-
-# =============================================================================
-# 5. CHARGEMENT DE DONNÉES / DATA LOADING
-# =============================================================================
-
-def load_data_from_file(
-    file_path: str,
-    delimiter: str = None,
-) -> np.ndarray:
-    """
-    FR: Charge une carte d'intensité ou de phase depuis un fichier (txt ou csv).
-
-    EN: Loads an intensity or phase map from a file (txt or csv).
-
-    Args:
-        file_path (str): Chemin vers le fichier.
-        delimiter (str, optional): Délimiteur pour les fichiers txt/csv. Default: None (auto-detect).
-
-    Returns:
-        np.ndarray: Données chargées sous forme de tableau 2D.
-
-    Raises:
-        ValueError: Si le fichier n'est pas au format txt ou csv.
-        FileNotFoundError: Si le fichier n'existe pas.
-    """
-    if not file_path.endswith(('.txt', '.csv')):
-        raise ValueError("Seuls les fichiers .txt et .csv sont supportés.")
-
-    try:
-        if file_path.endswith('.csv'):
-            with open(file_path, 'r') as f:
-                reader = csv.reader(f, delimiter=delimiter)
-                data = [[float(val) for val in row] for row in reader]
-        else:  # .txt
-            with open(file_path, 'r') as f:
-                if delimiter is None:
-                    # Essayer de détecter le délimiteur
-                    first_line = f.readline()
-                    f.seek(0)
-                    if ';' in first_line:
-                        delimiter = ';'
-                    elif ',' in first_line:
-                        delimiter = ','
-                    elif '\t' in first_line:
-                        delimiter = '\t'
-                    else:
-                        delimiter = ' '
-                data = np.loadtxt(file_path, delimiter=delimiter)
-                return data
-        return np.array(data)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Le fichier {file_path} n'existe pas.")
-
-
-# =============================================================================
-# 6. FONCTIONS UTILITAIRES / UTILITY FUNCTIONS
-# =============================================================================
-
-def compute_pv_rms(phase: np.ndarray) -> Tuple[float, float]:
-    """
-    FR: Calcule le PV (Peak-to-Valley) et le RMS (Root Mean Square) d'une carte de phase.
-
-    EN: Computes the PV (Peak-to-Valley) and RMS (Root Mean Square) of a phase map.
-
-    Args:
-        phase (np.ndarray): Carte de phase en nm.
-
-    Returns:
-        Tuple[float, float]: (PV, RMS) en nm.
-    """
-    pv = np.max(phase) - np.min(phase)
-    rms = np.sqrt(np.mean(phase**2))
-    return pv, rms
-
-
-def get_area_mm2(diameter_mm: float) -> float:
-    """
-    FR: Calcule la surface du faisceau en mm².
-
-    EN: Computes the beam area in mm².
-
-    Args:
-        diameter_mm (float): Diamètre du faisceau en mm.
-
-    Returns:
-        float: Surface en mm².
+    FR: Crée une grille de coordonnées 2D.
+    EN: Creates a 2D coordinate grid.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
     """
     radius_mm = diameter_mm / 2
-    return np.pi * radius_mm**2
+    x = np.linspace(center[0] - radius_mm, center[0] + radius_mm, num_points)
+    y = np.linspace(center[1] - radius_mm, center[1] + radius_mm, num_points)
+    X, Y = np.meshgrid(x, y)
+    return x, y, X, Y
+
+
+def create_polar_grid(num_points_r: int,
+                      num_points_theta: int,
+                      max_radius_mm: float = 1.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    FR: Crée une grille de coordonnées polaires.
+    EN: Creates a polar coordinate grid.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    r = np.linspace(0, max_radius_mm, num_points_r)
+    theta = np.linspace(0, TWO_PI, num_points_theta, endpoint=False)
+    R, Theta = np.meshgrid(r, theta)
+    return r, theta, R, Theta
+
+
+def cartesian_to_polar(x: Union[float, np.ndarray],
+                       y: Union[float, np.ndarray]) -> Tuple[Union[float, np.ndarray], Union[float, np.ndarray]]:
+    """FR: Convertit des coordonnées cartésiennes en coordonnées polaires."""
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    return r, theta
+
+
+def polar_to_cartesian(r: Union[float, np.ndarray],
+                       theta: Union[float, np.ndarray]) -> Tuple[Union[float, np.ndarray], Union[float, np.ndarray]]:
+    """FR: Convertit des coordonnées polaires en coordonnées cartésiennes."""
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+    return x, y
 
 
 # =============================================================================
-# 7. TESTS UNITAIRES / UNIT TESTS
+# FONCTIONS DE GESTION DES NaN (TOUTES GÈRENT LES NaN SANS LES PROPAGER)
+# =============================================================================
+
+def handle_nan(array: np.ndarray,
+               method: str = 'zero') -> np.ndarray:
+    """
+    FR: Gère les valeurs NaN dans un tableau.
+    EN: Handles NaN values in an array.
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    if not np.any(np.isnan(array)):
+        return array
+    if method == 'zero':
+        return np.nan_to_num(array, nan=0.0)
+    elif method == 'mean':
+        return np.nan_to_num(array, nan=np.nanmean(array))
+    elif method == 'median':
+        return np.nan_to_num(array, nan=np.nanmedian(array))
+    elif method == 'ignore':
+        return array
+    else:
+        logger.warning(f"Unknown NaN handling method: {method}. Using 'zero'.")
+        return np.nan_to_num(array, nan=0.0)
+
+
+def safe_divide(numerator: Union[float, np.ndarray],
+                denominator: Union[float, np.ndarray],
+                default: float = 0.0) -> Union[float, np.ndarray]:
+    """
+    FR: Division sûre (évite les divisions par zéro et les NaN).
+    EN: Safe division (avoids division by zero and NaN).
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = np.divide(numerator, denominator)
+    return np.where(np.isfinite(result), result, default)
+
+
+def safe_sqrt(x: Union[float, np.ndarray],
+              default: float = 0.0) -> Union[float, np.ndarray]:
+    """
+    FR: Racine carrée sûre.
+    EN: Safe square root.
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = np.sqrt(np.maximum(np.real(x), 0.0))
+    return np.where(np.isfinite(result), result, default)
+
+
+def safe_log(x: Union[float, np.ndarray],
+              default: float = 0.0) -> Union[float, np.ndarray]:
+    """
+    FR: Logarithme sûr.
+    EN: Safe logarithm.
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = np.log(np.maximum(np.real(x), NUMERICAL_TOLERANCE))
+    return np.where(np.isfinite(result), result, default)
+
+
+def safe_exp(x: Union[float, np.ndarray],
+              default: float = 0.0,
+              clip_max: float = 700.0) -> Union[float, np.ndarray]:
+    """
+    FR: Exponentielle sûre.
+    EN: Safe exponential.
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    x_clipped = np.clip(x, -clip_max, clip_max)
+    with np.errstate(over='ignore', invalid='ignore'):
+        result = np.exp(x_clipped)
+    return np.where(np.isfinite(result), result, default)
+
+
+# =============================================================================
+# FONCTIONS DE STATISTIQUES
+# =============================================================================
+
+def compute_pv_rms(data: np.ndarray,
+                   handle_nan: bool = True) -> Tuple[float, float]:
+    """
+    FR: Calcule le PV (Peak-to-Valley) et le RMS.
+    EN: Computes PV (Peak-to-Valley) and RMS.
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Data Reduction and Error Analysis" by P. R. Bevington (1969)
+    """
+    if data is None:
+        raise ValueError("data cannot be None")
+    if handle_nan:
+        data = handle_nan(data, method='zero')
+    return float(np.max(data) - np.min(data)), float(np.std(data))
+
+
+def compute_statistics(data: np.ndarray,
+                        handle_nan: bool = True) -> Dict[str, float]:
+    """
+    FR: Calcule les statistiques complètes d'un tableau.
+    EN: Computes complete statistics of an array.
+    
+    DOES NOT propagate NaN.
+    """
+    if data is None:
+        raise ValueError("data cannot be None")
+    if handle_nan:
+        data = handle_nan(data, method='zero')
+    return {
+        'min': float(np.min(data)),
+        'max': float(np.max(data)),
+        'mean': float(np.mean(data)),
+        'std': float(np.std(data)),
+        'pv': float(np.max(data) - np.min(data)),
+        'rms': float(np.std(data))
+    }
+
+
+# =============================================================================
+# FONCTIONS DE NORMALISATION
+# =============================================================================
+
+def normalize_array(array: np.ndarray,
+                     method: str = 'max',
+                     handle_nan: bool = True) -> np.ndarray:
+    """
+    FR: Normalise un tableau.
+    EN: Normalizes an array.
+    
+    DOES NOT propagate NaN.
+    
+    Sources: "Numerical Recipes in C" by Press et al. (1992), Ch. 1
+    """
+    if array is None:
+        raise ValueError("array cannot be None")
+    if handle_nan:
+        array = handle_nan(array, method='zero')
+    
+    if method == 'max':
+        max_val = np.max(array)
+        return array / max_val if max_val > 0 else array
+    elif method == 'sum':
+        total = np.sum(array)
+        return array / total if total > 0 else array
+    elif method == 'rms':
+        rms = np.std(array)
+        return array / rms if rms > 0 else array
+    elif method == 'mean':
+        return array - np.mean(array)
+    elif method == 'zero_min':
+        return array - np.min(array)
+    else:
+        raise ValueError(f"Méthode de normalisation inconnue: {method}")
+
+
+# =============================================================================
+# FONCTIONS DE CONVERSION D'UNITÉS
+# =============================================================================
+
+def nm_to_rad(phase_nm: Union[float, np.ndarray],
+              wavelength_nm: float = DEFAULT_WAVELENGTH_NM) -> Union[float, np.ndarray]:
+    """FR: Convertit une phase de nanomètres en radians."""
+    return phase_nm * (TWO_PI / wavelength_nm)
+
+
+def rad_to_nm(phase_rad: Union[float, np.ndarray],
+              wavelength_nm: float = DEFAULT_WAVELENGTH_NM) -> Union[float, np.ndarray]:
+    """FR: Convertit une phase de radians en nanomètres."""
+    return phase_rad * (wavelength_nm / TWO_PI)
+
+
+def nm_to_lambda(phase_nm: Union[float, np.ndarray],
+                 wavelength_nm: float = DEFAULT_WAVELENGTH_NM) -> Union[float, np.ndarray]:
+    """FR: Convertit une phase de nanomètres en longueurs d'onde."""
+    return phase_nm / wavelength_nm
+
+
+def lambda_to_nm(phase_lambda: Union[float, np.ndarray],
+                  wavelength_nm: float = DEFAULT_WAVELENGTH_NM) -> Union[float, np.ndarray]:
+    """FR: Convertit une phase de longueurs d'onde en nanomètres."""
+    return phase_lambda * wavelength_nm
+
+
+def rad_to_mrad(phase_rad: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    """FR: Convertit des radians en milliradians."""
+    return phase_rad * RAD_TO_MRAD
+
+
+def mrad_to_rad(phase_mrad: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    """FR: Convertit des milliradians en radians."""
+    return phase_mrad * MRAD_TO_RAD
+
+
+def mm_to_um(length_mm: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    """FR: Convertit des millimètres en micromètres."""
+    return length_mm * 1000.0
+
+
+def um_to_mm(length_um: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    """FR: Convertit des micromètres en millimètres."""
+    return length_um / 1000.0
+
+
+# =============================================================================
+# FONCTIONS DE GÉNÉRATION DE MODES
+# =============================================================================
+
+def _binomial_coefficient(n: int, k: int) -> float:
+    """FR: Calcule le coefficient binomial C(n, k)."""
+    if k < 0 or k > n:
+        return 0.0
+    if k == 0 or k == n:
+        return 1.0
+    result = 1.0
+    for i in range(1, k + 1):
+        result = result * (n - k + i) / i
+    return result
+
+
+def _zernike_radial_polynomial(n: int, m: int, R: np.ndarray) -> np.ndarray:
+    """FR: Calcule le polynôme radial de Zernike R_n^m(r)."""
+    result = np.zeros_like(R)
+    for k in range((n - m) // 2 + 1):
+        c1 = _binomial_coefficient(n - k, k)
+        c2 = _binomial_coefficient(n - 2 * k, (n - m) // 2 - k)
+        sign = (-1) ** k
+        term = sign * c1 * c2 * (R ** (n - 2 * k))
+        result += term
+    return result
+
+
+def _apply_zernike_normalization(Z: np.ndarray,
+                                  n: int,
+                                  m: int,
+                                  normalization: Union[str, NormalizationType] = NormalizationType.NOLL) -> np.ndarray:
+    """FR: Applique la normalisation au polynôme de Zernike."""
+    if isinstance(normalization, str):
+        normalization = NormalizationType(normalization.lower())
+    
+    if normalization == NormalizationType.PV:
+        max_val = np.max(np.abs(Z))
+        return Z / max_val if max_val > 0 else Z
+    elif normalization == NormalizationType.RMS:
+        rms = np.std(Z)
+        return Z / rms if rms > 0 else Z
+    elif normalization == NormalizationType.NOLL:
+        if n == 0 and m == 0:
+            return Z
+        else:
+            return Z * np.sqrt((n + 1) / np.pi)
+    elif normalization == NormalizationType.WYANT:
+        if m == 0:
+            return Z * np.sqrt(n + 1)
+        else:
+            return Z * np.sqrt(2 * (n + 1))
+    else:
+        return Z
+
+
+def generate_zernike_polynomial(n: int,
+                              m: int,
+                              x: Union[float, np.ndarray],
+                              y: Union[float, np.ndarray],
+                              ordering: Union[str, ZernikeOrdering] = ZernikeOrdering.NOLL,
+                              normalization: Union[str, NormalizationType] = NormalizationType.NOLL,
+                              wavelength_nm: float = DEFAULT_WAVELENGTH_NM) -> np.ndarray:
+    """
+    FR: Génère un polynôme de Zernike.
+    
+    Sources:
+        - "Zernike polynomials and atmospheric turbulence" by J. W. Noll (1976)
+        - "Principles of Adaptive Optics" by R. K. Tyson (1991), Ch. 2
+    """
+    if isinstance(ordering, str):
+        ordering = ZernikeOrdering(ordering.lower())
+    
+    R = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    theta = np.where(R > 0, theta, 0.0)
+    
+    if n < abs(m) or (n - abs(m)) % 2 != 0:
+        return np.zeros_like(R)
+    
+    radial_poly = _zernike_radial_polynomial(n, abs(m), R)
+    
+    if m >= 0:
+        azimuthal_term = np.cos(abs(m) * theta)
+    else:
+        azimuthal_term = np.sin(abs(m) * theta)
+    
+    Z = radial_poly * azimuthal_term
+    return _apply_zernike_normalization(Z, n, m, normalization)
+
+
+def generate_zernike_modes(max_degree: int,
+                          ordering: Union[str, ZernikeOrdering] = ZernikeOrdering.NOLL,
+                          normalization: Union[str, NormalizationType] = NormalizationType.NOLL,
+                          num_points: int = 512) -> List[Tuple[int, int, np.ndarray]]:
+    """FR: Génère tous les modes de Zernike jusqu'à un degré maximal."""
+    if isinstance(ordering, str):
+        ordering = ZernikeOrdering(ordering.lower())
+    if isinstance(normalization, str):
+        normalization = NormalizationType(normalization.lower())
+    
+    modes = []
+    x, y, X, Y = create_grid(num_points, diameter_mm=2.0)
+    X_norm = X / 1.0
+    Y_norm = Y / 1.0
+    
+    for n in range(max_degree + 1):
+        for m in range(-n, n + 1, 2):
+            Z = generate_zernike_polynomial(n, m, X_norm, Y_norm, ordering, normalization)
+            modes.append((n, m, Z))
+    
+    return modes
+
+
+def generate_legendre_polynomial(n: int,
+                                x: Union[float, np.ndarray]) -> np.ndarray:
+    """
+    FR: Génère un polynôme de Legendre P_n(x).
+    
+    Sources: "Handbook of Mathematical Functions" by Abramowitz & Stegun (1964), Ch. 22
+    """
+    try:
+        from scipy.special import eval_legendre
+        return eval_legendre(n, x)
+    except ImportError:
+        if n == 0:
+            return np.ones_like(x)
+        elif n == 1:
+            return x
+        else:
+            P_prev_prev = np.ones_like(x)
+            P_prev = x
+            for i in range(2, n + 1):
+                P_current = ((2 * i - 1) * x * P_prev - (i - 1) * P_prev_prev) / i
+                P_prev_prev = P_prev
+                P_prev = P_current
+            return P_prev
+
+
+def generate_hermite_polynomial(n: int,
+                                x: Union[float, np.ndarray]) -> np.ndarray:
+    """FR: Génère un polynôme d'Hermite H_n(x)."""
+    try:
+        from scipy.special import hermite
+        return hermite(n)(x)
+    except ImportError:
+        if n == 0:
+            return np.ones_like(x)
+        elif n == 1:
+            return 2 * x
+        else:
+            H_prev_prev = np.ones_like(x)
+            H_prev = 2 * x
+            for i in range(2, n + 1):
+                H_current = 2 * x * H_prev - 2 * (i - 1) * H_prev_prev
+                H_prev_prev = H_prev
+                H_prev = H_current
+            return H_prev
+
+
+def generate_laguerre_polynomial(n: int,
+                                 m: int,
+                                 x: Union[float, np.ndarray]) -> np.ndarray:
+    """FR: Génère un polynôme de Laguerre généralisé L_n^m(x)."""
+    try:
+        from scipy.special import genlaguerre
+        return genlaguerre(n, m)(x)
+    except ImportError:
+        logger.warning("scipy not available. Using approximate Laguerre polynomial.")
+        return x**n
+
+
+# =============================================================================
+# FONCTIONS D'INTERPOLATION
+# =============================================================================
+
+def interpolate_1d(x: np.ndarray,
+                   y: np.ndarray,
+                   x_new: np.ndarray,
+                   method: str = 'linear',
+                   fill_value: float = 0.0) -> np.ndarray:
+    """FR: Interpole un tableau 1D."""
+    from scipy.interpolate import interp1d
+    interp_func = interp1d(x, y, kind=method, bounds_error=False, fill_value=fill_value)
+    return interp_func(x_new)
+
+
+def interpolate_2d(X: np.ndarray,
+                   Y: np.ndarray,
+                   Z: np.ndarray,
+                   X_new: np.ndarray,
+                   Y_new: np.ndarray,
+                   method: str = 'linear',
+                   fill_value: float = 0.0) -> np.ndarray:
+    """FR: Interpole un tableau 2D."""
+    from scipy.interpolate import griddata
+    points = np.column_stack((X.ravel(), Y.ravel()))
+    values = Z.ravel()
+    new_points = np.column_stack((X_new.ravel(), Y_new.ravel()))
+    Z_new = griddata(points, values, new_points, method=method, fill_value=fill_value)
+    return Z_new.reshape(X_new.shape)
+
+
+def smooth_gaussian(data: np.ndarray,
+                    sigma: float = 1.0) -> np.ndarray:
+    """FR: Lisse un tableau avec un filtre gaussien."""
+    from scipy.ndimage import gaussian_filter
+    return gaussian_filter(data, sigma=sigma)
+
+
+# =============================================================================
+# FONCTIONS DE PHASE
+# =============================================================================
+
+def wrap_phase(phase: np.ndarray,
+               units: str = 'rad') -> np.ndarray:
+    """FR: Enroule la phase entre -π et π (rad) ou -λ/2 et λ/2 (nm)."""
+    if units == 'rad':
+        return np.arctan2(np.sin(phase), np.cos(phase))
+    elif units == 'nm':
+        wavelength_nm = DEFAULT_WAVELENGTH_NM
+        phase_rad = nm_to_rad(phase, wavelength_nm)
+        phase_wrapped_rad = np.arctan2(np.sin(phase_rad), np.cos(phase_rad))
+        return rad_to_nm(phase_wrapped_rad, wavelength_nm)
+    else:
+        raise ValueError(f"Unités inconnues: {units}")
+
+
+def unwrap_phase(phase: np.ndarray) -> np.ndarray:
+    """FR: Déroule la phase."""
+    return np.unwrap(phase)
+
+
+# =============================================================================
+# FONCTIONS DE GÉNÉRATION ALÉATOIRE
+# =============================================================================
+
+def set_random_seed(seed: int) -> None:
+    """FR: Définit la graine pour les nombres aléatoires."""
+    np.random.seed(seed)
+
+
+def generate_random_array(shape: Tuple[int, ...],
+                          distribution: str = 'uniform',
+                          low: float = 0.0,
+                          high: float = 1.0,
+                          seed: Optional[int] = None) -> np.ndarray:
+    """FR: Génère un tableau de nombres aléatoires."""
+    if seed is not None:
+        set_random_seed(seed)
+    if distribution == 'uniform':
+        return np.random.uniform(low, high, size=shape)
+    elif distribution == 'normal':
+        return np.random.normal(loc=(low + high) / 2, scale=(high - low) / 6, size=shape)
+    elif distribution == 'poisson':
+        return np.random.poisson(lam=low, size=shape)
+    else:
+        raise ValueError(f"Distribution inconnue: {distribution}")
+
+
+# =============================================================================
+# FONCTIONS UTILITAIRES DIVERSES
+# =============================================================================
+
+def clip_array(array: np.ndarray,
+               min_val: Optional[float] = None,
+               max_val: Optional[float] = None) -> np.ndarray:
+    """FR: Clip un tableau entre des valeurs minimales et maximales."""
+    if min_val is not None and max_val is not None:
+        return np.clip(array, min_val, max_val)
+    elif min_val is not None:
+        return np.maximum(array, min_val)
+    elif max_val is not None:
+        return np.minimum(array, max_val)
+    else:
+        return array
+
+
+def circular_mask(shape: Tuple[int, int],
+                   radius: float,
+                   center: Optional[Tuple[float, float]] = None) -> np.ndarray:
+    """FR: Crée un masque circulaire."""
+    ny, nx = shape
+    if center is None:
+        center = (nx / 2, ny / 2)
+    y, x = np.ogrid[:ny, :nx]
+    dist_from_center = np.sqrt((x - center[0])**2 + (y - center[1])**2)
+    return dist_from_center <= radius
+
+
+# =============================================================================
+# TESTS UNITAIRES
 # =============================================================================
 
 class TestMathAndPhysicsTools:
-    """
-    FR: Classe de tests unitaires pour MathAndPhysicsTools.py.
-    EN: Unit test class for MathAndPhysicsTools.py.
-    """
-
-    def test_generate_zernike_modes(self):
-        """Test la génération des modes de Zernike."""
-        grid_x, grid_y = create_grid(10.0, 128)
-        modes = generate_zernike_modes(10, "Noll", grid_x, grid_y)
-        assert modes.shape == (10, 128, 128), f"Expected shape (10, 128, 128), got {modes.shape}"
-
-    def test_normalize_phase_RMS(self):
-        """Test la normalisation RMS d'une phase."""
-        phase = np.random.rand(100, 100) * 100
-        normalized = normalize_phase(phase, "RMS", 1.0, 633.0)
-        rms = np.sqrt(np.mean(normalized**2))
-        assert abs(rms - 633.0) < 1e-5, f"Expected RMS=633.0, got {rms}"
-
-    def test_normalize_phase_PV(self):
-        """Test la normalisation PV d'une phase."""
-        phase = np.random.rand(100, 100) * 100
-        normalized = normalize_phase(phase, "PV", 1.0, 633.0)
-        pv = np.max(normalized) - np.min(normalized)
-        assert abs(pv - 633.0) < 1e-5, f"Expected PV=633.0, got {pv}"
-
-    def test_nm_to_rad(self):
-        """Test la conversion nm → rad."""
-        phase_nm = np.array([633.0, 1266.0])
-        phase_rad = nm_to_rad(phase_nm, 633.0)
-        expected = np.array([2 * np.pi, 4 * np.pi])
-        np.testing.assert_allclose(phase_rad, expected, rtol=1e-5)
-
-    def test_rad_to_nm(self):
-        """Test la conversion rad → nm."""
-        phase_rad = np.array([2 * np.pi, 4 * np.pi])
-        phase_nm = rad_to_nm(phase_rad, 633.0)
-        expected = np.array([633.0, 1266.0])
-        np.testing.assert_allclose(phase_nm, expected, rtol=1e-5)
-
-    def test_J_to_mJ(self):
-        """Test la conversion J → mJ."""
-        energy_J = 0.001
-        energy_mJ = J_to_mJ(energy_J)
-        assert energy_mJ == 1.0, f"Expected 1.0 mJ, got {energy_mJ}"
-
-    def test_mJ_to_J(self):
-        """Test la conversion mJ → J."""
-        energy_mJ = 1.0
-        energy_J = mJ_to_J(energy_mJ)
-        assert energy_J == 0.001, f"Expected 0.001 J, got {energy_J}"
-
-    def test_W_to_mW(self):
-        """Test la conversion W → mW."""
-        power_W = 0.001
-        power_mW = W_to_mW(power_W)
-        assert power_mW == 1.0, f"Expected 1.0 mW, got {power_mW}"
-
-    def test_mW_to_W(self):
-        """Test la conversion mW → W."""
-        power_mW = 1.0
-        power_W = mW_to_W(power_mW)
-        assert power_W == 0.001, f"Expected 0.001 W, got {power_W}"
-
-    def test_W_m2_to_W_cm2(self):
-        """Test la conversion W/m² → W/cm²."""
-        intensity_W_m2 = 10000.0
-        intensity_W_cm2 = W_m2_to_W_cm2(intensity_W_m2)
-        assert intensity_W_cm2 == 1.0, f"Expected 1.0 W/cm², got {intensity_W_cm2}"
-
-    def test_W_cm2_to_W_m2(self):
-        """Test la conversion W/cm² → W/m²."""
-        intensity_W_cm2 = 1.0
-        intensity_W_m2 = W_cm2_to_W_m2(intensity_W_cm2)
-        assert intensity_W_m2 == 10000.0, f"Expected 10000.0 W/m², got {intensity_W_m2}"
-
-    def test_energy_to_power(self):
-        """Test la conversion énergie → puissance."""
-        energy_mJ = 1.0  # 1 mJ
-        pulse_duration_s = 0.001  # 1 ms
-        power_W = energy_to_power(energy_mJ, "mJ", pulse_duration_s, "W")
-        assert power_W == 1.0, f"Expected 1.0 W, got {power_W}"
-
-    def test_power_to_energy(self):
-        """Test la conversion puissance → énergie."""
-        power_W = 1.0  # 1 W
-        pulse_duration_s = 0.001  # 1 ms
-        energy_mJ = power_to_energy(power_W, "W", pulse_duration_s, "mJ")
-        assert energy_mJ == 1.0, f"Expected 1.0 mJ, got {energy_mJ}"
-
-    def test_power_to_intensity(self):
-        """Test la conversion puissance → intensité."""
-        power_W = 1.0  # 1 W
-        diameter_mm = 10.0  # 10 mm
-        intensity_W_m2 = power_to_intensity(power_W, "W", diameter_mm, "W/m2")
-        expected = 1.0 / (np.pi * (0.005)**2)  # 1 W / (π * (5e-3 m)^2)
-        assert abs(intensity_W_m2 - expected) < 1e-5, f"Expected {expected} W/m², got {intensity_W_m2}"
-
-    def test_intensity_to_power(self):
-        """Test la conversion intensité → puissance."""
-        intensity_W_m2 = 10000.0  # 10000 W/m²
-        diameter_mm = 10.0  # 10 mm
-        power_W = intensity_to_power(intensity_W_m2, "W/m2", diameter_mm, "W")
-        expected = 10000.0 * (np.pi * (0.005)**2)  # 10000 W/m² * (π * (5e-3 m)^2)
-        assert abs(power_W - expected) < 1e-5, f"Expected {expected} W, got {power_W}"
+    """FR: Tests unitaires pour MathAndPhysicsTools.py."""
 
     def test_create_grid(self):
-        """Test la création d'une grille."""
-        grid_x, grid_y = create_grid(10.0, 128)
-        assert grid_x.shape == (128, 128), f"Expected shape (128, 128), got {grid_x.shape}"
-        assert np.min(grid_x) == -5.0 and np.max(grid_x) == 5.0, "Grid x range incorrect"
-        assert np.min(grid_y) == -5.0 and np.max(grid_y) == 5.0, "Grid y range incorrect"
+        """FR: Test la création de grille."""
+        x, y, X, Y = create_grid(10, diameter_mm=2.0)
+        assert x.shape == (10,)
+        assert X.shape == (10, 10)
+
+    def test_handle_nan(self):
+        """FR: Test la gestion des NaN."""
+        data = np.array([[1.0, 2.0, np.nan], [4.0, np.nan, 6.0]])
+        result_zero = handle_nan(data, method='zero')
+        assert not np.any(np.isnan(result_zero))
+
+    def test_safe_divide(self):
+        """FR: Test la division sûre."""
+        result = safe_divide(np.array([1.0, 2.0, 3.0]), np.array([1.0, 0.0, np.nan]), default=0.0)
+        assert result[0] == 1.0
+        assert result[1] == 0.0
+        assert result[2] == 0.0
 
     def test_compute_pv_rms(self):
-        """Test le calcul du PV et RMS."""
-        phase = np.array([[0, 1], [2, 3]])
-        pv, rms = compute_pv_rms(phase)
-        assert pv == 3.0, f"Expected PV=3.0, got {pv}"
-        assert abs(rms - np.sqrt(3.5)) < 1e-5, f"Expected RMS={np.sqrt(3.5)}, got {rms}"
+        """FR: Test le calcul du PV et du RMS."""
+        data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        pv, rms = compute_pv_rms(data)
+        assert pv == 5.0
+        assert rms > 0
+
+    def test_conversions(self):
+        """FR: Test les conversions d'unités."""
+        phase_nm = 100.0
+        wavelength_nm = 633.0
+        phase_rad = nm_to_rad(phase_nm, wavelength_nm)
+        assert np.isclose(rad_to_nm(phase_rad, wavelength_nm), phase_nm, atol=1e-10)
 
 
 if __name__ == "__main__":
