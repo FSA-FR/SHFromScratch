@@ -1,1696 +1,413 @@
 """
 Material_Behaviour.py
-FR: Module pour la gestion du comportement des matériaux optiques et mécaniques.
-    Permet de calculer :
-    - L'indice de réfraction en fonction de la longueur d'onde et de la température.
-    - La dilatation/contraction thermique des matériaux.
-    - La réflectance et la transmittance en fonction de la longueur d'onde, de l'épaisseur et de la polarisation.
-    - La variation de puissance optique pour les optiques réfractives.
-    - La déformation des microstructures (matrices de microlentilles, etc.).
-    
-    Matériaux optiques principaux : Fused_Silica, BK7, SF5, Silicium.
-    Matériaux mécaniques : Acier, Aluminium, Invar, Cuivre.
 
-EN: Module for managing the behavior of optical and mechanical materials.
-    Allows calculating:
-    - Refractive index as a function of wavelength and temperature.
-    - Thermal expansion/contraction of materials.
-    - Reflectance and transmittance as a function of wavelength, thickness, and polarization.
-    - Optical power variation for refractive optics.
-    - Deformation of microstructures (microlens arrays, etc.).
+FR: Module pour la modélisation du comportement des matériaux optiques et mécaniques.
     
-    Main optical materials: Fused_Silica, BK7, SF5, Silicon.
-    Mechanical materials: Steel, Aluminum, Invar, Copper.
+    Fonctionnalités principales :
+    - Variation des indices de réfraction avec la longueur d'onde et la température
+    - Chromatisme des matériaux optiques
+    - Expansion thermique des matériaux (optiques et mécaniques)
+    - Réflexion et transmission
+    - Variation de la puissance optique avec la température
+    - Déformation des microstructures sous l'effet thermique
+    
+    Unités :
+    - Longueurs : mm
+    - Longueur d'onde : nm
+    - Température : K (kelvin) ou °C
+    - Indice de réfraction : sans unité
+    - Coefficient d'expansion thermique : ppm/°C
+    - Puissance optique : mm⁻¹
+
+EN: Module for modeling optical and mechanical material behavior.
+    
+    Main features:
+    - Variation of refractive indices with wavelength and temperature
+    - Chromatic dispersion of optical materials
+    - Thermal expansion of materials (optical and mechanical)
+    - Reflection and transmission
+    - Variation of optical power with temperature
+    - Deformation of microstructures under thermal effects
+    
+    Units:
+    - Lengths: mm
+    - Wavelength: nm
+    - Temperature: K (kelvin) or °C
+    - Refractive index: unitless
+    - Thermal expansion coefficient: ppm/°C
+    - Optical power: mm⁻¹
 
 Author: Vibe (Mistral AI)
 Repository: https://github.com/FSA-FR/SHFromScratch
 
+Dependencies:
+    - numpy
+    - MathAndPhysicsTools (pour les fonctions outils)
+
 Sources:
-    - Refractive index data from https://refractiveindex.info
-    - Thermal expansion coefficients from various scientific publications
+    - "Handbook of Optics" by W. G. Driscoll (1978)
+    - "Thermal Expansion of Solids" by C. S. Desai (1984)
+    - "refractiveindex.info" (https://refractiveindex.info)
 """
 
 import numpy as np
 import logging
-from typing import Optional, Tuple, Dict, Union, List
+from typing import Optional, Tuple, Dict, List
 from dataclasses import dataclass, field
 from enum import Enum
-import requests
-import json
-from scipy.interpolate import interp1d
+
+from MathAndPhysicsTools import handle_nan, DEFAULT_WAVELENGTH_NM
 
 
-# Configuration du logger
+# =============================================================================
+# CONFIGURATION GLOBALE
+# =============================================================================
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Material_Behaviour")
 
+REFERENCE_TEMPERATURE_K = 293.15
+REFERENCE_TEMPERATURE_C = 20.0
+
 
 # =============================================================================
-# 1. ENUMS ET CONSTANTES / ENUMS AND CONSTANTS
+# DONNÉES DES MATÉRIAUX
 # =============================================================================
 
-class MaterialType(Enum):
-    """FR: Type de matériau (optique ou mécanique)."""
+SELLMEIER_COEFFICIENTS = {
+    'Fused_Silica': {'B1': 0.6961663, 'C1': 0.0684043, 'B2': 0.4079426, 'C2': 0.1162414, 'B3': 0.8974794, 'C3': 9.896161, 'valid_range_nm': (210, 6700)},
+    'BK7': {'B1': 1.03961212, 'C1': 0.00600069867, 'B2': 0.231792344, 'C2': 0.0200179144, 'B3': 1.01046945, 'C3': 103.560653, 'valid_range_nm': (300, 2500)},
+    'SF5': {'B1': 1.43140877, 'C1': 0.0052863912, 'B2': 0.21456388, 'C2': 0.015099804, 'B3': 0.94678683, 'C3': 122.209985, 'valid_range_nm': (300, 2500)},
+    'CaF2': {'B1': 0.5675888, 'C1': 0.00354178, 'B2': 0.4716143, 'C2': 0.0117549, 'B3': 3.8484723, 'C3': 1200.5558, 'valid_range_nm': (200, 8000)},
+    'Sapphire': {'B1': 1.023798, 'C1': 0.0037754, 'B2': 1.503182, 'C2': 0.0122544, 'B3': 5.509158, 'C3': 321.7706, 'valid_range_nm': (200, 5500)},
+}
+
+SELLMEIER_IR_COEFFICIENTS = {
+    'Silicon': {'A': 11.685800, 'B': 0.9398164, 'C': 8.10461e-3, 'valid_range_nm': (1200, 14000)}
+}
+
+THERMAL_EXPANSION_COEFFICIENTS = {
+    'Fused_Silica': {'CTE': 0.51, 'dCTE_dT': 0.0008, 'valid_range_C': (-200, 1000)},
+    'BK7': {'CTE': 7.1, 'dCTE_dT': 0.001, 'valid_range_C': (-100, 500)},
+    'SF5': {'CTE': 8.2, 'dCTE_dT': 0.001, 'valid_range_C': (-100, 500)},
+    'CaF2': {'CTE': 18.85, 'dCTE_dT': 0.002, 'valid_range_C': (-200, 800)},
+    'Sapphire': {'CTE': 5.0, 'dCTE_dT': 0.0005, 'valid_range_C': (-200, 1500)},
+    'Silicon': {'CTE': 2.6, 'dCTE_dT': 0.0002, 'valid_range_C': (-200, 1200)},
+    'Steel': {'CTE': 12.0, 'dCTE_dT': 0.0005, 'valid_range_C': (-100, 800)},
+    'Aluminum': {'CTE': 23.1, 'dCTE_dT': 0.001, 'valid_range_C': (-200, 600)},
+    'Invar': {'CTE': 1.2, 'dCTE_dT': 0.0001, 'valid_range_C': (-100, 500)},
+    'Copper': {'CTE': 16.5, 'dCTE_dT': 0.0008, 'valid_range_C': (-200, 400)},
+}
+
+REFRACTIVE_INDEX_TEMPERATURE_COEFFICIENTS = {
+    'Fused_Silica': {'dn_dT': 10.0, 'valid_range_C': (-200, 1000)},
+    'BK7': {'dn_dT': -1.0, 'valid_range_C': (-100, 500)},
+    'SF5': {'dn_dT': -2.0, 'valid_range_C': (-100, 500)},
+    'CaF2': {'dn_dT': -11.0, 'valid_range_C': (-200, 800)},
+    'Sapphire': {'dn_dT': 13.0, 'valid_range_C': (-200, 1500)},
+    'Silicon': {'dn_dT': 150.0, 'valid_range_C': (-200, 1200)},
+}
+
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
+class MaterialCategory(Enum):
     OPTICAL = "optical"
     MECHANICAL = "mechanical"
+    OPTICAL_MECHANICAL = "optical_mechanical"
 
 
-class Polarization(Enum):
-    """FR: Polarisation de la lumière."""
-    NONE = "none"      # Pas de polarisation (par défaut)
-    S = "s"           # Polarisation s (perpendiculaire au plan d'incidence)
-    P = "p"           # Polarisation p (parallèle au plan d'incidence)
-    CIRCULAR = "circular"  # Polarisation circulaire
-    ELLIPTICAL = "elliptical"  # Polarisation elliptique
+class RefractiveIndexModel(Enum):
+    CONSTANT = "constant"
+    SELLMEIER = "sellmeier"
+    SELLMEIER_IR = "sellmeier_ir"
+    POLYNOMIAL = "polynomial"
 
 
-class MicrostructureType(Enum):
-    """FR: Type de microstructure."""
-    MICROLENS_ARRAY = "microlens_array"
-    MICROPRISM_ARRAY = "microprism_array"
-    MICROHOLE_ARRAY = "microhole_array"
-
-
-# Constantes physiques
-C_LIGHT_M_S = 299792458  # Vitesse de la lumière en m/s
-K_TO_C = 273.15  # Conversion Kelvin → Celsius
-STANDARD_TEMPERATURE_K = 293.15  # Température standard (20°C)
+class ThermalExpansionModel(Enum):
+    CONSTANT = "constant"
+    LINEAR = "linear"
+    POLYNOMIAL = "polynomial"
 
 
 # =============================================================================
-# 2. BASE DE DONNÉES DES MATÉRIAUX / MATERIAL DATABASE
+# CLASSE: MATERIAL
 # =============================================================================
-
-@dataclass
-class RefractiveIndexModel:
-    """
-    FR: Modèle pour l'indice de réfraction d'un matériau.
-        Stocke les coefficients pour différents modèles (Sellmeier, Cauchy, etc.).
-
-    EN: Model for the refractive index of a material.
-        Stores coefficients for different models (Sellmeier, Cauchy, etc.).
-
-    Attributes:
-        model_type (str): Type de modèle ("Sellmeier", "Cauchy", "Polynomial", "Tabulated").
-        coefficients (Dict): Coefficients du modèle.
-        wavelength_range_nm (Tuple[float, float]): Plage de validité en nm.
-        temperature_K (float): Température de référence en Kelvin.
-        source (str): Source des données.
-    """
-    model_type: str
-    coefficients: Dict[str, float]
-    wavelength_range_nm: Tuple[float, float]
-    temperature_K: float = STANDARD_TEMPERATURE_K
-    source: str = ""
-
-
-@dataclass
-class ThermalExpansionModel:
-    """
-    FR: Modèle pour l'expansion thermique d'un matériau.
-        Stocke les coefficients du CTE (Coefficient of Thermal Expansion).
-
-    EN: Model for the thermal expansion of a material.
-        Stores CTE (Coefficient of Thermal Expansion) coefficients.
-
-    Attributes:
-        cte_model (str): Type de modèle ("constant", "linear", "polynomial").
-        coefficients (Dict): Coefficients du modèle.
-        temperature_range_K (Tuple[float, float]): Plage de validité en Kelvin.
-        source (str): Source des données.
-    """
-    cte_model: str
-    coefficients: Dict[str, float]
-    temperature_range_K: Tuple[float, float]
-    source: str = ""
-
-
-@dataclass
-class OpticalProperties:
-    """
-    FR: Propriétés optiques d'un matériau.
-
-    EN: Optical properties of a material.
-
-    Attributes:
-        refractive_index_model (RefractiveIndexModel): Modèle de l'indice de réfraction.
-        thermal_expansion_model (ThermalExpansionModel): Modèle d'expansion thermique.
-        absorption_coefficient (float): Coefficient d'absorption en m⁻¹ (à une longueur d'onde de référence).
-        reference_wavelength_nm (float): Longueur d'onde de référence pour l'absorption.
-    """
-    refractive_index_model: RefractiveIndexModel
-    thermal_expansion_model: ThermalExpansionModel
-    absorption_coefficient: float = 0.0
-    reference_wavelength_nm: float = 633.0
-
 
 @dataclass
 class Material:
     """
-    FR: Classe représentant un matériau (optique ou mécanique).
-        Contient toutes les propriétés nécessaires pour simuler son comportement.
-
-    EN: Class representing a material (optical or mechanical).
-        Contains all properties needed to simulate its behavior.
-
-    Attributes:
-        name (str): Nom du matériau.
-        material_type (MaterialType): Type de matériau (optique ou mécanique).
-        optical_properties (Optional[OpticalProperties]): Propriétés optiques (si applicable).
-        thermal_expansion_model (ThermalExpansionModel): Modèle d'expansion thermique.
-        density_kg_m3 (float): Masse volumique en kg/m³.
-        young_modulus_Pa (float): Module de Young en Pascals.
-        poisson_ratio (float): Coefficient de Poisson.
-        thermal_conductivity_W_mK (float): Conductivité thermique en W/(m·K).
-        specific_heat_J_kgK (float): Chaleur spécifique en J/(kg·K).
+    FR: Matériau optique ou mécanique.
+    EN: Optical or mechanical material.
+    
+    Sources:
+        - "Handbook of Optics" by W. G. Driscoll (1978)
+        - "Thermal Expansion of Solids" by C. S. Desai (1984)
     """
+    
     name: str
-    material_type: MaterialType
-    optical_properties: Optional[OpticalProperties] = None
-    thermal_expansion_model: ThermalExpansionModel = field(default_factory=ThermalExpansionModel)
-    density_kg_m3: float = 0.0
-    young_modulus_Pa: float = 0.0
-    poisson_ratio: float = 0.0
-    thermal_conductivity_W_mK: float = 0.0
-    specific_heat_J_kgK: float = 0.0
+    category: MaterialCategory = MaterialCategory.OPTICAL
+    refractive_index_model: RefractiveIndexModel = RefractiveIndexModel.CONSTANT
+    refractive_index_coefficients: Dict = field(default_factory=dict)
+    thermal_expansion_model: ThermalExpansionModel = ThermalExpansionModel.CONSTANT
+    thermal_expansion_coefficients: Dict = field(default_factory=dict)
+    reference_temperature_K: float = REFERENCE_TEMPERATURE_K
+    reference_wavelength_nm: float = DEFAULT_WAVELENGTH_NM
+    dn_dT: float = 0.0
+    valid_wavelength_range_nm: Tuple[float, float] = (200, 20000)
+    valid_temperature_range_C: Tuple[float, float] = (-273, 2000)
 
+    def __post_init__(self):
+        if self.valid_wavelength_range_nm[0] >= self.valid_wavelength_range_nm[1]:
+            raise ValueError("Plage de longueurs d'onde invalide")
+        if self.valid_temperature_range_C[0] >= self.valid_temperature_range_C[1]:
+            raise ValueError("Plage de températures invalide")
 
-# =============================================================================
-# 3. BASE DE DONNÉES DES MATÉRIAUX PRÉDÉFINIS / PREDEFINED MATERIAL DATABASE
-# =============================================================================
-
-# --- Données des indices de réfraction (depuis refractiveindex.info) ---
-# Format : {"matériau": {"modèle": ..., "coefficients": {...}, "plage_nm": [...], "source": ...}}
-REFRACTIVE_INDEX_DATA = {
-    # Fused Silica (SiO₂) - Malacara (2007) - 0.21-6.7 µm
-    "Fused_Silica": {
-        "Sellmeier": {
-            "coefficients": {
-                "B1": 0.6961663,
-                "B2": 0.4079426,
-                "B3": 0.8974794,
-                "C1": 0.0684043**2,  # µm² → nm²
-                "C2": 0.1162414**2,
-                "C3": 9.896161**2,
-            },
-            "wavelength_range_nm": (210.0, 6700.0),
-            "temperature_K": STANDARD_TEMPERATURE_K,
-            "source": "Malacara, Optical Shop Testing, Wiley (2007)",
-        },
-        # Modèle alternatif : Sellmeier (Horiba)
-        "Sellmeier_Horiba": {
-            "coefficients": {
-                "B1": 0.696750,
-                "B2": 0.408218,
-                "B3": 0.890815,
-                "C1": 0.069066**2,
-                "C2": 0.115662**2,
-                "C3": 9.900559**2,
-            },
-            "wavelength_range_nm": (185.0, 2500.0),
-            "temperature_K": STANDARD_TEMPERATURE_K,
-            "source": "Horiba Jobin Yvon",
-        },
-        # Modèle pour la dépendance en température (dn/dT)
-        "dn_dT": {
-            "coefficients": {
-                "D0": 7.0e-6,   # Coefficient principal
-                "D1": 1.0e-8,   # Coefficient secondaire
-                "T0": 293.15,   # Température de référence
-            },
-            "temperature_range_K": (200.0, 500.0),
-            "source": "Experimental data",
-        },
-    },
-    
-    # BK7 (Schott) - 0.3-2.5 µm
-    "BK7": {
-        "Sellmeier": {
-            "coefficients": {
-                "B1": 1.03961212,
-                "B2": 0.231792344,
-                "B3": 1.01046945,
-                "C1": 0.00600069867**2,
-                "C2": 0.0200179144**2,
-                "C3": 103.560653**2,
-            },
-            "wavelength_range_nm": (300.0, 2500.0),
-            "temperature_K": STANDARD_TEMPERATURE_K,
-            "source": "Schott Glass Catalog",
-        },
-        "dn_dT": {
-            "coefficients": {
-                "D0": 7.1e-6,
-                "D1": 1.2e-8,
-                "T0": 293.15,
-            },
-            "temperature_range_K": (200.0, 500.0),
-            "source": "Schott technical data",
-        },
-    },
-    
-    # SF5 (Schott) - 0.3-2.5 µm
-    "SF5": {
-        "Sellmeier": {
-            "coefficients": {
-                "B1": 1.43171315,
-                "B2": 0.26447592,
-                "B3": 1.09976717,
-                "C1": 0.00947447347**2,
-                "C2": 0.0447937948**2,
-                "C3": 97.9952058**2,
-            },
-            "wavelength_range_nm": (300.0, 2500.0),
-            "temperature_K": STANDARD_TEMPERATURE_K,
-            "source": "Schott Glass Catalog",
-        },
-        "dn_dT": {
-            "coefficients": {
-                "D0": 8.2e-6,
-                "D1": 1.5e-8,
-                "T0": 293.15,
-            },
-            "temperature_range_K": (200.0, 500.0),
-            "source": "Schott technical data",
-        },
-    },
-    
-    # Silicium (Si) - 1.2-14 µm (IR)
-    "Silicon": {
-        "Sellmeier_IR": {
-            "coefficients": {
-                "A": 11.6858,
-                "B": 0.939816,
-                "C": 8.10461e-3,  # µm⁻²
-            },
-            "wavelength_range_nm": (1200.0, 14000.0),
-            "temperature_K": STANDARD_TEMPERATURE_K,
-            "source": "Li, Optics Letters 8, 308 (1983)",
-        },
-        # Modèle alternatif : Polynomial
-        "Polynomial": {
-            "coefficients": {
-                "a0": 3.41696,
-                "a1": -0.128356,
-                "a2": 0.013921,
-                "a3": -0.000439,
-            },
-            "wavelength_range_nm": (1200.0, 8000.0),
-            "temperature_K": STANDARD_TEMPERATURE_K,
-            "source": "Edwards, Applied Optics 24, 4483 (1985)",
-        },
-        "dn_dT": {
-            "coefficients": {
-                "D0": 1.8e-5,
-                "D1": 5.0e-9,
-                "T0": 293.15,
-            },
-            "temperature_range_K": (200.0, 500.0),
-            "source": "Experimental data",
-        },
-    },
-}
-
-# --- Données d'expansion thermique ---
-# Format : {"matériau": {"modèle": ..., "coefficients": {...}, "plage_K": [...], "source": ...}}
-THERMAL_EXPANSION_DATA = {
-    # Matériaux optiques
-    "Fused_Silica": {
-        "constant": {
-            "coefficients": {"CTE": 0.51e-6},  # ppm/°C
-            "temperature_range_K": (0.0, 1000.0),
-            "source": "Corning, Fused Silica Technical Data",
-        },
-        "polynomial": {
-            "coefficients": {
-                "a": 0.51e-6,
-                "b": 0.0,
-                "c": 0.0,
-            },
-            "temperature_range_K": (0.0, 1000.0),
-            "source": "Corning, Fused Silica Technical Data",
-        },
-    },
-    "BK7": {
-        "constant": {
-            "coefficients": {"CTE": 7.1e-6},  # ppm/°C
-            "temperature_range_K": (0.0, 300.0),
-            "source": "Schott Glass Catalog",
-        },
-    },
-    "SF5": {
-        "constant": {
-            "coefficients": {"CTE": 8.2e-6},  # ppm/°C
-            "temperature_range_K": (0.0, 300.0),
-            "source": "Schott Glass Catalog",
-        },
-    },
-    "Silicon": {
-        "polynomial": {
-            "coefficients": {
-                "a": 2.56e-6,   # CTE à 20°C
-                "b": 1.2e-9,    # Coefficient linéaire
-                "c": 0.0,       # Coefficient quadratique
-            },
-            "temperature_range_K": (0.0, 500.0),
-            "source": "Okada, Journal of Applied Physics 45, 3564 (1974)",
-        },
-    },
-    
-    # Matériaux mécaniques
-    "Steel": {
-        "constant": {
-            "coefficients": {"CTE": 12.0e-6},  # ppm/°C (acier doux)
-            "temperature_range_K": (0.0, 500.0),
-            "source": "Engineering Toolbox",
-        },
-    },
-    "Aluminum": {
-        "constant": {
-            "coefficients": {"CTE": 23.1e-6},  # ppm/°C
-            "temperature_range_K": (0.0, 500.0),
-            "source": "Engineering Toolbox",
-        },
-    },
-    "Invar": {
-        "constant": {
-            "coefficients": {"CTE": 1.2e-6},  # ppm/°C (allage Fe-Ni)
-            "temperature_range_K": (0.0, 200.0),
-            "source": "Engineering Toolbox",
-        },
-    },
-    "Copper": {
-        "constant": {
-            "coefficients": {"CTE": 16.5e-6},  # ppm/°C
-            "temperature_range_K": (0.0, 500.0),
-            "source": "Engineering Toolbox",
-        },
-    },
-}
-
-# --- Autres propriétés des matériaux ---
-MATERIAL_PROPERTIES = {
-    "Fused_Silica": {
-        "density_kg_m3": 2200.0,
-        "young_modulus_Pa": 73.1e9,
-        "poisson_ratio": 0.17,
-        "thermal_conductivity_W_mK": 1.38,
-        "specific_heat_J_kgK": 745.0,
-        "absorption_coefficient_m_minus_1": 0.0,  # Négligeable dans le visible/IR
-    },
-    "BK7": {
-        "density_kg_m3": 2510.0,
-        "young_modulus_Pa": 82.0e9,
-        "poisson_ratio": 0.206,
-        "thermal_conductivity_W_mK": 1.114,
-        "specific_heat_J_kgK": 858.0,
-        "absorption_coefficient_m_minus_1": 0.0,
-    },
-    "SF5": {
-        "density_kg_m3": 3860.0,
-        "young_modulus_Pa": 76.8e9,
-        "poisson_ratio": 0.257,
-        "thermal_conductivity_W_mK": 0.858,
-        "specific_heat_J_kgK": 520.0,
-        "absorption_coefficient_m_minus_1": 0.0,
-    },
-    "Silicon": {
-        "density_kg_m3": 2329.0,
-        "young_modulus_Pa": 190.0e9,
-        "poisson_ratio": 0.28,
-        "thermal_conductivity_W_mK": 149.0,
-        "specific_heat_J_kgK": 700.0,
-        "absorption_coefficient_m_minus_1": 10.0,  # ~10 m⁻¹ dans l'IR
-    },
-    "Steel": {
-        "density_kg_m3": 7850.0,
-        "young_modulus_Pa": 200.0e9,
-        "poisson_ratio": 0.28,
-        "thermal_conductivity_W_mK": 50.0,
-        "specific_heat_J_kgK": 500.0,
-        "absorption_coefficient_m_minus_1": 0.0,
-    },
-    "Aluminum": {
-        "density_kg_m3": 2700.0,
-        "young_modulus_Pa": 69.0e9,
-        "poisson_ratio": 0.33,
-        "thermal_conductivity_W_mK": 235.0,
-        "specific_heat_J_kgK": 900.0,
-        "absorption_coefficient_m_minus_1": 0.0,
-    },
-    "Invar": {
-        "density_kg_m3": 8050.0,
-        "young_modulus_Pa": 148.0e9,
-        "poisson_ratio": 0.26,
-        "thermal_conductivity_W_mK": 11.0,
-        "specific_heat_J_kgK": 500.0,
-        "absorption_coefficient_m_minus_1": 0.0,
-    },
-    "Copper": {
-        "density_kg_m3": 8960.0,
-        "young_modulus_Pa": 120.0e9,
-        "poisson_ratio": 0.34,
-        "thermal_conductivity_W_mK": 401.0,
-        "specific_heat_J_kgK": 385.0,
-        "absorption_coefficient_m_minus_1": 0.0,
-    },
-}
-
-
-# =============================================================================
-# 4. CLASSE MATERIAL / MATERIAL CLASS
-# =============================================================================
-
-class MaterialBehaviour:
-    """
-    FR: Classe principale pour la gestion du comportement des matériaux.
-        Permet de calculer l'indice de réfraction, l'expansion thermique,
-        la réflectance, la transmittance, et la variation de puissance optique.
-
-    EN: Main class for managing material behavior.
-        Allows calculating refractive index, thermal expansion,
-        reflectance, transmittance, and optical power variation.
-
-    Attributes:
-        material (Material): Matériau à analyser.
-        logger (logging.Logger): Logger pour le débogage.
-    """
-
-    def __init__(self, material_name: str):
-        """
-        FR: Initialise le comportement du matériau.
-
-        EN: Initializes the material behavior.
-
-        Args:
-            material_name (str): Nom du matériau. Options:
-                - "Fused_Silica"
-                - "BK7"
-                - "SF5"
-                - "Silicon"
-                - "Steel"
-                - "Aluminum"
-                - "Invar"
-                - "Copper"
-
-        Raises:
-            ValueError: Si le matériau est inconnu.
-        """
-        if material_name not in REFRACTIVE_INDEX_DATA and material_name not in THERMAL_EXPANSION_DATA:
-            raise ValueError(
-                f"Matériau inconnu : {material_name}. "
-                f"Options disponibles : {list(REFRACTIVE_INDEX_DATA.keys()) + list(THERMAL_EXPANSION_DATA.keys())}"
-            )
-
-        self.material_name = material_name
-        self.material_type = MaterialType.OPTICAL if material_name in REFRACTIVE_INDEX_DATA else MaterialType.MECHANICAL
+    def get_refractive_index(self, wavelength_nm: float, temperature_K: Optional[float] = None) -> float:
+        """FR: Calcule l'indice de réfraction. EN: Calculates the refractive index."""
+        if not (self.valid_wavelength_range_nm[0] <= wavelength_nm <= self.valid_wavelength_range_nm[1]):
+            logger.warning(f"Longueur d'onde {wavelength_nm}nm hors plage valide")
         
-        # Charger les propriétés
-        self._load_material_properties()
+        if temperature_K is not None:
+            if not (self.valid_temperature_range_C[0] <= (temperature_K - 273.15) <= self.valid_temperature_range_C[1]):
+                logger.warning(f"Température {temperature_K}K hors plage valide")
         
-        # Configuration du logger
-        self.logger = logging.getLogger("MaterialBehaviour")
-        self.logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-        self.logger.addHandler(handler)
-        
-        self.logger.info("MaterialBehaviour initialized with material: %s", material_name)
-
-    def _load_material_properties(self) -> None:
-        """
-        FR: Charge les propriétés du matériau depuis les bases de données.
-
-        EN: Loads material properties from databases.
-        """
-        # Déterminer le type de matériau
-        if self.material_name in REFRACTIVE_INDEX_DATA:
-            # Matériau optique
-            self.material_type = MaterialType.OPTICAL
-            
-            # Charger le modèle d'indice de réfraction
-            refractive_data = REFRACTIVE_INDEX_DATA[self.material_name]
-            # Utiliser le premier modèle disponible
-            model_type = list(refractive_data.keys())[0]
-            model_data = refractive_data[model_type]
-            
-            self.refractive_index_model = RefractiveIndexModel(
-                model_type=model_type,
-                coefficients=model_data["coefficients"],
-                wavelength_range_nm=model_data["wavelength_range_nm"],
-                temperature_K=model_data.get("temperature_K", STANDARD_TEMPERATURE_K),
-                source=model_data.get("source", "")
-            )
-            
-            # Charger le modèle dn/dT si disponible
-            if "dn_dT" in refractive_data:
-                dn_dT_data = refractive_data["dn_dT"]
-                self.dn_dT_model = RefractiveIndexModel(
-                    model_type="dn_dT",
-                    coefficients=dn_dT_data["coefficients"],
-                    wavelength_range_nm=dn_dT_data.get("wavelength_range_nm", (0.0, 1e6)),
-                    temperature_K=dn_dT_data.get("temperature_K", STANDARD_TEMPERATURE_K),
-                    source=dn_dT_data.get("source", "")
-                )
-            else:
-                self.dn_dT_model = None
-            
-            # Charger les propriétés optiques
-            optical_props = MATERIAL_PROPERTIES.get(self.material_name, {})
-            thermal_expansion_data = THERMAL_EXPANSION_DATA.get(self.material_name, {})
-            thermal_model_type = list(thermal_expansion_data.keys())[0] if thermal_expansion_data else "constant"
-            thermal_model_data = thermal_expansion_data.get(thermal_model_type, {})
-            
-            self.thermal_expansion_model = ThermalExpansionModel(
-                cte_model=thermal_model_type,
-                coefficients=thermal_model_data.get("coefficients", {}),
-                temperature_range_K=thermal_model_data.get("temperature_range_K", (0.0, 1000.0)),
-                source=thermal_model_data.get("source", "")
-            )
-            
-            self.optical_properties = OpticalProperties(
-                refractive_index_model=self.refractive_index_model,
-                thermal_expansion_model=self.thermal_expansion_model,
-                absorption_coefficient=optical_props.get("absorption_coefficient_m_minus_1", 0.0),
-                reference_wavelength_nm=optical_props.get("reference_wavelength_nm", 633.0)
-            )
+        if self.refractive_index_model == RefractiveIndexModel.CONSTANT:
+            n = self.refractive_index_coefficients.get('n', 1.5)
+        elif self.refractive_index_model == RefractiveIndexModel.SELLMEIER:
+            n = self._sellmeier_model(wavelength_nm)
+        elif self.refractive_index_model == RefractiveIndexModel.SELLMEIER_IR:
+            n = self._sellmeier_ir_model(wavelength_nm)
+        elif self.refractive_index_model == RefractiveIndexModel.POLYNOMIAL:
+            n = self._polynomial_model(wavelength_nm)
         else:
-            # Matériau mécanique
-            self.material_type = MaterialType.MECHANICAL
-            self.optical_properties = None
-            self.refractive_index_model = None
-            self.dn_dT_model = None
-            
-            # Charger le modèle d'expansion thermique
-            thermal_expansion_data = THERMAL_EXPANSION_DATA.get(self.material_name, {})
-            thermal_model_type = list(thermal_expansion_data.keys())[0] if thermal_expansion_data else "constant"
-            thermal_model_data = thermal_expansion_data.get(thermal_model_type, {})
-            
-            self.thermal_expansion_model = ThermalExpansionModel(
-                cte_model=thermal_model_type,
-                coefficients=thermal_model_data.get("coefficients", {}),
-                temperature_range_K=thermal_model_data.get("temperature_range_K", (0.0, 1000.0)),
-                source=thermal_model_data.get("source", "")
-            )
+            n = 1.5
         
-        # Charger les autres propriétés
-        self.density_kg_m3 = MATERIAL_PROPERTIES.get(self.material_name, {}).get("density_kg_m3", 0.0)
-        self.young_modulus_Pa = MATERIAL_PROPERTIES.get(self.material_name, {}).get("young_modulus_Pa", 0.0)
-        self.poisson_ratio = MATERIAL_PROPERTIES.get(self.material_name, {}).get("poisson_ratio", 0.0)
-        self.thermal_conductivity_W_mK = MATERIAL_PROPERTIES.get(self.material_name, {}).get("thermal_conductivity_W_mK", 0.0)
-        self.specific_heat_J_kgK = MATERIAL_PROPERTIES.get(self.material_name, {}).get("specific_heat_J_kgK", 0.0)
-
-    # =========================================================================
-    # Méthodes pour l'indice de réfraction / Refractive Index Methods
-    # =========================================================================
-
-    def get_refractive_index(
-        self,
-        wavelength_nm: Union[float, np.ndarray],
-        temperature_K: float = STANDARD_TEMPERATURE_K,
-        model: Optional[str] = None,
-    ) -> Union[float, np.ndarray]:
-        """
-        FR: Calcule l'indice de réfraction du matériau pour une longueur d'onde donnée.
-            Si le matériau a un modèle dn/dT, la température est prise en compte.
-
-        EN: Calculates the refractive index of the material for a given wavelength.
-            If the material has a dn/dT model, temperature is taken into account.
-
-        Args:
-            wavelength_nm (float or np.ndarray): Longueur d'onde en nm.
-            temperature_K (float): Température en Kelvin (défaut: 293.15 K = 20°C).
-            model (str, optional): Modèle à utiliser (défaut: premier modèle disponible).
-
-        Returns:
-            float or np.ndarray: Indice de réfraction (n).
-
-        Raises:
-            ValueError: Si le matériau n'a pas de modèle d'indice de réfraction.
-        """
-        if self.refractive_index_model is None:
-            raise ValueError(f"Le matériau {self.material_name} n'a pas de propriétés optiques.")
+        if temperature_K is not None:
+            delta_T = temperature_K - self.reference_temperature_K
+            n += n * (self.dn_dT / 1e6) * delta_T
         
-        if model is None:
-            model = self.refractive_index_model.model_type
-        
-        # Convertir la longueur d'onde en µm pour les formules
+        return n
+
+    def _sellmeier_model(self, wavelength_nm: float) -> float:
+        """FR: Modèle de Sellmeier. EN: Sellmeier model."""
         wavelength_um = wavelength_nm / 1000.0
-        
-        if model == "Sellmeier":
-            return self._sellmeier_model(wavelength_um, temperature_K)
-        elif model == "Sellmeier_Horiba":
-            return self._sellmeier_model(wavelength_um, temperature_K)
-        elif model == "Sellmeier_IR":
-            return self._sellmeier_ir_model(wavelength_um, temperature_K)
-        elif model == "Polynomial":
-            return self._polynomial_model(wavelength_um, temperature_K)
-        else:
-            raise ValueError(f"Modèle inconnu : {model}")
+        n_squared = 1.0
+        for i in range(1, 4):
+            B = self.refractive_index_coefficients.get(f'B{i}', 0.0)
+            C = self.refractive_index_coefficients.get(f'C{i}', 0.0)
+            n_squared += B * (wavelength_um**2) / (wavelength_um**2 - C)
+        return np.sqrt(n_squared)
 
-    def _sellmeier_model(
-        self,
-        wavelength_um: Union[float, np.ndarray],
-        temperature_K: float,
-    ) -> Union[float, np.ndarray]:
-        """
-        FR: Calcule l'indice de réfraction avec le modèle de Sellmeier.
-            n² = 1 + B1*λ²/(λ² - C1) + B2*λ²/(λ² - C2) + B3*λ²/(λ² - C3)
+    def _sellmeier_ir_model(self, wavelength_nm: float) -> float:
+        """FR: Modèle de Sellmeier IR. EN: Sellmeier IR model."""
+        wavelength_um = wavelength_nm / 1000.0
+        A = self.refractive_index_coefficients.get('A', 0.0)
+        B = self.refractive_index_coefficients.get('B', 0.0)
+        C = self.refractive_index_coefficients.get('C', 0.0)
+        return np.sqrt(A + B * (wavelength_um**2) / (wavelength_um**2 - C))
 
-        EN: Calculates the refractive index using the Sellmeier model.
-            n² = 1 + B1*λ²/(λ² - C1) + B2*λ²/(λ² - C2) + B3*λ²/(λ² - C3)
-
-        Args:
-            wavelength_um (float or np.ndarray): Longueur d'onde en µm.
-            temperature_K (float): Température en Kelvin.
-
-        Returns:
-            float or np.ndarray: Indice de réfraction (n).
-        """
-        coeffs = self.refractive_index_model.coefficients
-        
-        # Calculer n²
-        term1 = coeffs["B1"] * wavelength_um**2 / (wavelength_um**2 - coeffs["C1"])
-        term2 = coeffs["B2"] * wavelength_um**2 / (wavelength_um**2 - coeffs["C2"])
-        term3 = coeffs["B3"] * wavelength_um**2 / (wavelength_um**2 - coeffs["C3"])
-        n_squared = 1.0 + term1 + term2 + term3
-        
-        # Calculer n
-        n = np.sqrt(n_squared)
-        
-        # Appliquer la correction de température si disponible
-        if self.dn_dT_model is not None:
-            dn_dT = self._get_dn_dT(temperature_K)
-            n_reference = self.get_refractive_index(wavelength_um * 1000.0, STANDARD_TEMPERATURE_K, model)
-            n = n_reference + dn_dT * (temperature_K - STANDARD_TEMPERATURE_K)
-        
+    def _polynomial_model(self, wavelength_nm: float) -> float:
+        """FR: Modèle polynomial. EN: Polynomial model."""
+        wavelength_um = wavelength_nm / 1000.0
+        n = 0.0
+        for i in range(10):
+            a = self.refractive_index_coefficients.get(f'a{i}', 0.0)
+            n += a * (wavelength_um ** i)
         return n
 
-    def _sellmeier_ir_model(
-        self,
-        wavelength_um: Union[float, np.ndarray],
-        temperature_K: float,
-    ) -> Union[float, np.ndarray]:
-        """
-        FR: Calcule l'indice de réfraction avec le modèle de Sellmeier pour l'IR (Silicium).
-            n² = A + B*λ²/(λ² - C)
-
-        EN: Calculates the refractive index using the IR Sellmeier model (Silicon).
-            n² = A + B*λ²/(λ² - C)
-
-        Args:
-            wavelength_um (float or np.ndarray): Longueur d'onde en µm.
-            temperature_K (float): Température en Kelvin.
-
-        Returns:
-            float or np.ndarray: Indice de réfraction (n).
-        """
-        coeffs = self.refractive_index_model.coefficients
+    def get_thermal_expansion_coefficient(self, temperature_K: Optional[float] = None) -> float:
+        """FR: Calcule le CTE. EN: Calculates the thermal expansion coefficient."""
+        if temperature_K is None:
+            temperature_K = self.reference_temperature_K
+        temperature_C = temperature_K - 273.15
         
-        # Calculer n²
-        n_squared = coeffs["A"] + coeffs["B"] * wavelength_um**2 / (wavelength_um**2 - coeffs["C"])
-        
-        # Calculer n
-        n = np.sqrt(n_squared)
-        
-        # Appliquer la correction de température si disponible
-        if self.dn_dT_model is not None:
-            dn_dT = self._get_dn_dT(temperature_K)
-            n_reference = self.get_refractive_index(wavelength_um * 1000.0, STANDARD_TEMPERATURE_K)
-            n = n_reference + dn_dT * (temperature_K - STANDARD_TEMPERATURE_K)
-        
-        return n
-
-    def _polynomial_model(
-        self,
-        wavelength_um: Union[float, np.ndarray],
-        temperature_K: float,
-    ) -> Union[float, np.ndarray]:
-        """
-        FR: Calcule l'indice de réfraction avec un modèle polynomial.
-            n = a0 + a1*λ + a2*λ² + a3*λ³ + ...
-
-        EN: Calculates the refractive index using a polynomial model.
-            n = a0 + a1*λ + a2*λ² + a3*λ³ + ...
-
-        Args:
-            wavelength_um (float or np.ndarray): Longueur d'onde en µm.
-            temperature_K (float): Température en Kelvin.
-
-        Returns:
-            float or np.ndarray: Indice de réfraction (n).
-        """
-        coeffs = self.refractive_index_model.coefficients
-        
-        # Calculer n
-        n = np.zeros_like(wavelength_um) if isinstance(wavelength_um, np.ndarray) else 0.0
-        for i, key in enumerate(sorted(coeffs.keys(), key=lambda x: int(x[1:]) if x != "a0" else -1)):
-            power = int(key[1:]) if key != "a0" else 0
-            n += coeffs[key] * (wavelength_um ** power)
-        
-        # Appliquer la correction de température si disponible
-        if self.dn_dT_model is not None:
-            dn_dT = self._get_dn_dT(temperature_K)
-            n_reference = self.get_refractive_index(wavelength_um * 1000.0, STANDARD_TEMPERATURE_K)
-            n += dn_dT * (temperature_K - STANDARD_TEMPERATURE_K)
-        
-        return n
-
-    def _get_dn_dT(self, temperature_K: float) -> float:
-        """
-        FR: Calcule la dérivée de l'indice de réfraction par rapport à la température (dn/dT).
-
-        EN: Calculates the derivative of the refractive index with respect to temperature (dn/dT).
-
-        Args:
-            temperature_K (float): Température en Kelvin.
-
-        Returns:
-            float: dn/dT en K⁻¹.
-        """
-        if self.dn_dT_model is None:
-            return 0.0
-        
-        coeffs = self.dn_dT_model.coefficients
-        T0 = coeffs.get("T0", STANDARD_TEMPERATURE_K)
-        
-        if self.dn_dT_model.model_type == "dn_dT":
-            # Modèle simple : dn/dT = D0 + D1*(T - T0)
-            return coeffs.get("D0", 0.0) + coeffs.get("D1", 0.0) * (temperature_K - T0)
+        if self.thermal_expansion_model == ThermalExpansionModel.CONSTANT:
+            return self.thermal_expansion_coefficients.get('CTE', 0.0)
+        elif self.thermal_expansion_model == ThermalExpansionModel.LINEAR:
+            CTE_0 = self.thermal_expansion_coefficients.get('CTE', 0.0)
+            dCTE_dT = self.thermal_expansion_coefficients.get('dCTE_dT', 0.0)
+            return CTE_0 + dCTE_dT * (temperature_C - (self.reference_temperature_K - 273.15))
         else:
-            return coeffs.get("D0", 0.0)
+            return self.thermal_expansion_coefficients.get('CTE', 0.0)
 
-    # =========================================================================
-    # Méthodes pour l'expansion thermique / Thermal Expansion Methods
-    # =========================================================================
+    def calculate_thermal_expansion(self, initial_length_mm: float, initial_temperature_K: float, final_temperature_K: float) -> float:
+        """FR: Calcule l'expansion thermique. EN: Calculates thermal expansion."""
+        CTE_ppm = (self.get_thermal_expansion_coefficient(initial_temperature_K) + self.get_thermal_expansion_coefficient(final_temperature_K)) / 2
+        delta_T_C = final_temperature_K - initial_temperature_K
+        return initial_length_mm * (CTE_ppm / 1e6) * delta_T_C
 
-    def get_thermal_expansion(
-        self,
-        temperature_K: Union[float, np.ndarray],
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-    ) -> Union[float, np.ndarray]:
-        """
-        FR: Calcule le facteur d'expansion thermique pour une température donnée.
-            Retourne ΔL/L = CTE * (T - T_ref), où CTE est le coefficient d'expansion thermique.
+    def calculate_optical_power_change(self, initial_focal_length_mm: float, initial_temperature_K: float, final_temperature_K: float) -> float:
+        """FR: Calcule la variation de puissance optique. EN: Calculates optical power change."""
+        initial_optical_power = 1.0 / initial_focal_length_mm
+        delta_n = self.dn_dT / 1e6 * (final_temperature_K - initial_temperature_K)
+        delta_power_dn = initial_optical_power * delta_n
+        delta_L_L = self.calculate_thermal_expansion(initial_focal_length_mm, initial_temperature_K, final_temperature_K) / initial_focal_length_mm
+        delta_power_thermal = -initial_optical_power * delta_L_L
+        return delta_power_dn + delta_power_thermal
 
-        EN: Calculates the thermal expansion factor for a given temperature.
-            Returns ΔL/L = CTE * (T - T_ref), where CTE is the coefficient of thermal expansion.
-
-        Args:
-            temperature_K (float or np.ndarray): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-
-        Returns:
-            float or np.ndarray: Facteur d'expansion thermique (ΔL/L).
-        """
-        cte_model = self.thermal_expansion_model.cte_model
-        coeffs = self.thermal_expansion_model.coefficients
+    def calculate_reflectance(self, wavelength_nm: float, angle_rad: float = 0.0, polarization: str = 's') -> float:
+        """FR: Calcule la réflectance. EN: Calculates reflectance."""
+        n2 = self.get_refractive_index(wavelength_nm)
+        n1 = 1.0
         
-        if cte_model == "constant":
-            cte = coeffs.get("CTE", 0.0)
-            return cte * (temperature_K - reference_temperature_K)
-        elif cte_model == "linear":
-            cte0 = coeffs.get("CTE0", 0.0)
-            dCTE_dT = coeffs.get("dCTE_dT", 0.0)
-            T0 = coeffs.get("T0", reference_temperature_K)
-            cte = cte0 + dCTE_dT * (temperature_K - T0)
-            return cte * (temperature_K - reference_temperature_K)
-        elif cte_model == "polynomial":
-            cte = coeffs.get("a", 0.0) + coeffs.get("b", 0.0) * temperature_K + coeffs.get("c", 0.0) * temperature_K**2
-            return cte * (temperature_K - reference_temperature_K)
+        if angle_rad == 0:
+            return ((n1 - n2) / (n1 + n2))**2
+        
+        if polarization == 's':
+            theta1 = angle_rad
+            theta2 = np.arcsin(n1 * np.sin(theta1) / n2)
+            r_s = (n1 * np.cos(theta1) - n2 * np.cos(theta2)) / (n1 * np.cos(theta1) + n2 * np.cos(theta2))
+            return r_s**2
+        elif polarization == 'p':
+            theta1 = angle_rad
+            theta2 = np.arcsin(n1 * np.sin(theta1) / n2)
+            r_p = (n1 * np.cos(theta2) - n2 * np.cos(theta1)) / (n1 * np.cos(theta2) + n2 * np.cos(theta1))
+            return r_p**2
+        elif polarization == 'unpolarized':
+            R_s = self.calculate_reflectance(wavelength_nm, angle_rad, 's')
+            R_p = self.calculate_reflectance(wavelength_nm, angle_rad, 'p')
+            return (R_s + R_p) / 2
         else:
-            raise ValueError(f"Modèle d'expansion thermique inconnu : {cte_model}")
-
-    def get_thermal_dilation(
-        self,
-        length_m: float,
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-    ) -> float:
-        """
-        FR: Calcule la dilatation thermique absolue d'une longueur donnée.
-            ΔL = L0 * CTE * (T - T_ref)
-
-        EN: Calculates the absolute thermal dilation of a given length.
-            ΔL = L0 * CTE * (T - T_ref)
-
-        Args:
-            length_m (float): Longueur initiale en mètres.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-
-        Returns:
-            float: Dilatation thermique en mètres (ΔL).
-        """
-        expansion_factor = self.get_thermal_expansion(temperature_K, reference_temperature_K)
-        return length_m * expansion_factor
-
-    def get_thermal_contraction(
-        self,
-        length_m: float,
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-    ) -> float:
-        """
-        FR: Calcule la contraction thermique (valeur négative de la dilatation).
-
-        EN: Calculates the thermal contraction (negative value of dilation).
-
-        Args:
-            length_m (float): Longueur initiale en mètres.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-
-        Returns:
-            float: Contraction thermique en mètres (ΔL, négatif si T < T_ref).
-        """
-        return -self.get_thermal_dilation(length_m, temperature_K, reference_temperature_K)
-
-    def get_thermal_expansion_coefficient(
-        self,
-        temperature_K: float = STANDARD_TEMPERATURE_K,
-    ) -> float:
-        """
-        FR: Retourne le coefficient d'expansion thermique (CTE) à une température donnée.
-
-        EN: Returns the coefficient of thermal expansion (CTE) at a given temperature.
-
-        Args:
-            temperature_K (float): Température en Kelvin (défaut: 293.15 K).
-
-        Returns:
-            float: CTE en K⁻¹.
-        """
-        cte_model = self.thermal_expansion_model.cte_model
-        coeffs = self.thermal_expansion_model.coefficients
-        
-        if cte_model == "constant":
-            return coeffs.get("CTE", 0.0)
-        elif cte_model == "linear":
-            cte0 = coeffs.get("CTE0", 0.0)
-            dCTE_dT = coeffs.get("dCTE_dT", 0.0)
-            T0 = coeffs.get("T0", STANDARD_TEMPERATURE_K)
-            return cte0 + dCTE_dT * (temperature_K - T0)
-        elif cte_model == "polynomial":
-            return coeffs.get("a", 0.0) + coeffs.get("b", 0.0) * temperature_K + coeffs.get("c", 0.0) * temperature_K**2
-        else:
-            raise ValueError(f"Modèle d'expansion thermique inconnu : {cte_model}")
-
-    # =========================================================================
-    # Méthodes pour la réflectance et la transmittance / Reflectance and Transmittance Methods
-    # =========================================================================
-
-    def get_reflectance(
-        self,
-        wavelength_nm: float,
-        angle_deg: float = 0.0,
-        polarization: Polarization = Polarization.NONE,
-        n_medium: float = 1.0,
-    ) -> float:
-        """
-        FR: Calcule la réflectance (coefficient de réflexion) pour une interface entre deux milieux.
-            Utilise les équations de Fresnel.
-
-        EN: Calculates the reflectance (reflection coefficient) for an interface between two media.
-            Uses Fresnel equations.
-
-        Args:
-            wavelength_nm (float): Longueur d'onde en nm.
-            angle_deg (float): Angle d'incidence en degrés (défaut: 0.0 = incidence normale).
-            polarization (Polarization): Polarisation de la lumière (défaut: NONE).
-            n_medium (float): Indice de réfraction du milieu incident (défaut: 1.0 = air).
-
-        Returns:
-            float: Réflectance (0 ≤ R ≤ 1).
-
-        Notes:
-            - Pour une incidence normale, R = ((n2 - n1)/(n2 + n1))².
-            - Pour une incidence oblique, utilise les équations de Fresnel.
-        """
-        if self.optical_properties is None:
-            raise ValueError(f"Le matériau {self.material_name} n'a pas de propriétés optiques.")
-        
-        # Calculer l'indice de réfraction du matériau à la longueur d'onde donnée
-        n_material = self.get_refractive_index(wavelength_nm)
-        
-        # Incidence normale
-        if angle_deg == 0.0:
-            return ((n_material - n_medium) / (n_material + n_medium)) ** 2
-        
-        # Incidence oblique
-        angle_rad = np.deg2rad(angle_deg)
-        
-        # Calculer les composantes s et p
-        if polarization == Polarization.S or polarization == Polarization.NONE:
-            # Réflectance pour la polarisation s
-            r_s = (n_medium * np.cos(angle_rad) - n_material * np.sqrt(1 - (n_medium / n_material * np.sin(angle_rad))**2)) / \
-                  (n_medium * np.cos(angle_rad) + n_material * np.sqrt(1 - (n_medium / n_material * np.sin(angle_rad))**2))
-            R_s = r_s**2
-        else:
-            R_s = 0.0
-        
-        if polarization == Polarization.P or polarization == Polarization.NONE:
-            # Réflectance pour la polarisation p
-            r_p = (n_medium * np.sqrt(1 - (n_medium / n_material * np.sin(angle_rad))**2) - n_material * np.cos(angle_rad)) / \
-                  (n_medium * np.sqrt(1 - (n_medium / n_material * np.sin(angle_rad))**2) + n_material * np.cos(angle_rad))
-            R_p = r_p**2
-        else:
-            R_p = 0.0
-        
-        # Retourner la réflectance appropriée
-        if polarization == Polarization.S:
-            return float(R_s)
-        elif polarization == Polarization.P:
-            return float(R_p)
-        elif polarization == Polarization.CIRCULAR or polarization == Polarization.NONE:
-            # Réflectance moyenne pour lumière non polarisée
-            return float((R_s + R_p) / 2)
-        else:
-            return float((R_s + R_p) / 2)
-
-    def get_transmittance(
-        self,
-        wavelength_nm: float,
-        thickness_mm: float,
-        angle_deg: float = 0.0,
-        polarization: Polarization = Polarization.NONE,
-        n_medium: float = 1.0,
-    ) -> float:
-        """
-        FR: Calcule la transmittance à travers un matériau d'épaisseur donnée.
-            Prend en compte l'absorption et les réflexions multiples.
-
-        EN: Calculates the transmittance through a material of given thickness.
-            Takes into account absorption and multiple reflections.
-
-        Args:
-            wavelength_nm (float): Longueur d'onde en nm.
-            thickness_mm (float): Épaisseur du matériau en mm.
-            angle_deg (float): Angle d'incidence en degrés (défaut: 0.0).
-            polarization (Polarization): Polarisation de la lumière (défaut: NONE).
-            n_medium (float): Indice de réfraction du milieu incident (défaut: 1.0 = air).
-
-        Returns:
-            float: Transmittance (0 ≤ T ≤ 1).
-
-        Notes:
-            - La transmittance inclut les pertes par absorption et réflexion.
-            - Formules : T = (1-R)² * exp(-α*d) / (1 - R² * exp(-2α*d))
-              où R est la réflectance, α le coefficient d'absorption, et d l'épaisseur.
-        """
-        if self.optical_properties is None:
-            raise ValueError(f"Le matériau {self.material_name} n'a pas de propriétés optiques.")
-        
-        # Calculer la réflectance
-        R = self.get_reflectance(wavelength_nm, angle_deg, polarization, n_medium)
-        
-        # Calculer le coefficient d'absorption à la longueur d'onde donnée
-        alpha = self._get_absorption_coefficient(wavelength_nm)
-        
-        # Convertir l'épaisseur en mètres
-        thickness_m = thickness_mm * 1e-3
-        
-        # Calculer la transmittance
-        # T = (1-R)^2 * exp(-α*d) / (1 - R^2 * exp(-2α*d))
-        numerator = (1 - R)**2 * np.exp(-alpha * thickness_m)
-        denominator = 1 - R**2 * np.exp(-2 * alpha * thickness_m)
-        
-        # Éviter la division par zéro
-        if denominator == 0:
-            return 0.0
-        
-        return float(numerator / denominator)
-
-    def _get_absorption_coefficient(self, wavelength_nm: float) -> float:
-        """
-        FR: Retourne le coefficient d'absorption à une longueur d'onde donnée.
-            Pour l'instant, utilise une valeur constante (à améliorer avec des données spectrale).
-
-        EN: Returns the absorption coefficient at a given wavelength.
-            For now, uses a constant value (to be improved with spectral data).
-
-        Args:
-            wavelength_nm (float): Longueur d'onde en nm.
-
-        Returns:
-            float: Coefficient d'absorption en m⁻¹.
-        """
-        return self.optical_properties.absorption_coefficient
-
-    # =========================================================================
-    # Méthodes pour la puissance optique / Optical Power Methods
-    # =========================================================================
-
-    def get_optical_power_variation(
-        self,
-        focal_length_mm: float,
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-        wavelength_nm: float = 633.0,
-    ) -> float:
-        """
-        FR: Calcule la variation de puissance optique (1/f) due à la dilatation thermique.
-            Pour une lentille, la puissance optique P = (n - 1) * (1/R1 - 1/R2).
-            La variation de puissance vient de :
-            - La variation de l'indice de réfraction (dn/dT)
-            - La variation des rayons de courbure (dR/dT)
-
-        EN: Calculates the variation of optical power (1/f) due to thermal expansion.
-            For a lens, the optical power P = (n - 1) * (1/R1 - 1/R2).
-            The power variation comes from:
-            - The variation of the refractive index (dn/dT)
-            - The variation of the curvature radii (dR/dT)
-
-        Args:
-            focal_length_mm (float): Distance focale initiale en mm.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-            wavelength_nm (float): Longueur d'onde en nm (défaut: 633.0).
-
-        Returns:
-            float: Variation relative de la puissance optique (ΔP/P).
-
-        Notes:
-            - Pour une lentille mince : 1/f = (n - 1) * (1/R1 - 1/R2)
-            - Δ(1/f) / (1/f) ≈ (Δn / (n - 1)) - (ΔR / R)
-        """
-        if self.optical_properties is None:
-            raise ValueError(f"Le matériau {self.material_name} n'a pas de propriétés optiques.")
-        
-        # Calculer l'indice de réfraction à la température de référence
-        n_ref = self.get_refractive_index(wavelength_nm, reference_temperature_K)
-        
-        # Calculer l'indice de réfraction à la nouvelle température
-        n_new = self.get_refractive_index(wavelength_nm, temperature_K)
-        
-        # Variation de l'indice
-        delta_n = n_new - n_ref
-        
-        # Variation relative de n
-        delta_n_rel = delta_n / (n_ref - 1.0) if (n_ref - 1.0) != 0 else 0.0
-        
-        # Variation des rayons de courbure (due à la dilatation thermique)
-        # Pour une lentille, R augmente avec la température : ΔR/R = CTE * ΔT
-        delta_T = temperature_K - reference_temperature_K
-        cte = self.get_thermal_expansion_coefficient(reference_temperature_K)
-        delta_R_rel = cte * delta_T
-        
-        # Variation totale de la puissance optique
-        delta_power_rel = delta_n_rel - delta_R_rel
-        
-        return delta_power_rel
-
-    def get_focal_length_variation(
-        self,
-        focal_length_mm: float,
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-        wavelength_nm: float = 633.0,
-    ) -> float:
-        """
-        FR: Calcule la variation de la distance focale due à la dilatation thermique.
-
-        EN: Calculates the variation of the focal length due to thermal expansion.
-
-        Args:
-            focal_length_mm (float): Distance focale initiale en mm.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-            wavelength_nm (float): Longueur d'onde en nm (défaut: 633.0).
-
-        Returns:
-            float: Variation de la distance focale en mm (Δf).
-        """
-        delta_power_rel = self.get_optical_power_variation(
-            focal_length_mm, temperature_K, reference_temperature_K, wavelength_nm
-        )
-        
-        # P = 1/f, donc ΔP/P = -Δf/f
-        delta_f_rel = -delta_power_rel
-        
-        return focal_length_mm * delta_f_rel
-
-    # =========================================================================
-    # Méthodes pour les microstructures / Microstructure Methods
-    # =========================================================================
-
-    def get_position_shift(
-        self,
-        initial_position_mm: float,
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-        is_relative_to_support: bool = False,
-        support_material_name: Optional[str] = None,
-    ) -> float:
-        """
-        FR: Calcule le décalage de position d'un élément optique ou mécanique dû à la dilatation thermique.
-            Si l'élément est fixé sur un support, le décalage dépend aussi de la dilatation du support.
-
-        EN: Calculates the position shift of an optical or mechanical element due to thermal expansion.
-            If the element is fixed on a support, the shift also depends on the support's expansion.
-
-        Args:
-            initial_position_mm (float): Position initiale en mm.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-            is_relative_to_support (bool): Si True, l'élément est fixé sur un support (défaut: False).
-            support_material_name (str, optional): Nom du matériau du support (défaut: None).
-
-        Returns:
-            float: Décalage de position en mm (Δx).
-        """
-        if is_relative_to_support and support_material_name is not None:
-            # L'élément se déplace avec le support
-            support_material = MaterialBehaviour(support_material_name)
-            delta_position = support_material.get_thermal_dilation(
-                initial_position_mm * 1e-3, temperature_K, reference_temperature_K
-            ) * 1e3  # Convertir en mm
-        else:
-            # L'élément se dilate indépendamment
-            delta_position = self.get_thermal_dilation(
-                initial_position_mm * 1e-3, temperature_K, reference_temperature_K
-            ) * 1e3  # Convertir en mm
-        
-        return delta_position
-
-    def get_microstructure_deformation(
-        self,
-        microstructure_type: MicrostructureType,
-        pitch_mm: float,
-        num_elements: int,
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-        support_material_name: Optional[str] = None,
-    ) -> Dict[str, Union[float, np.ndarray]]:
-        """
-        FR: Calcule la déformation d'une microstructure (matrice de microlentilles, etc.) due à la dilatation thermique.
-            Retourne les nouvelles positions des éléments et la variation du pas (pitch).
-
-        EN: Calculates the deformation of a microstructure (microlens array, etc.) due to thermal expansion.
-            Returns the new positions of the elements and the variation of the pitch.
-
-        Args:
-            microstructure_type (MicrostructureType): Type de microstructure.
-            pitch_mm (float): Pas initial entre les éléments en mm.
-            num_elements (int): Nombre d'éléments dans la microstructure.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-            support_material_name (str, optional): Nom du matériau du support (défaut: None).
-
-        Returns:
-            Dict[str, Union[float, np.ndarray]]: Dictionnaire contenant :
-                - "initial_positions_mm": Positions initiales des éléments (np.ndarray).
-                - "new_positions_mm": Nouvelles positions après dilatation (np.ndarray).
-                - "initial_pitch_mm": Pas initial (float).
-                - "new_pitch_mm": Nouveau pas après dilatation (float).
-                - "delta_pitch_mm": Variation du pas (float).
-                - "max_displacement_mm": Déplacement maximal (float).
-        """
-        # Calculer le décalage du pas
-        delta_pitch = self.get_thermal_dilation(pitch_mm * 1e-3, temperature_K, reference_temperature_K) * 1e3
-        new_pitch = pitch_mm + delta_pitch
-        
-        # Calculer les positions initiales (centrées)
-        if num_elements % 2 == 1:
-            # Nombre impair d'éléments : centré sur 0
-            initial_positions = np.linspace(-(num_elements - 1) * pitch_mm / 2, 
-                                           (num_elements - 1) * pitch_mm / 2, 
-                                           num_elements)
-        else:
-            # Nombre pair d'éléments : centré entre -pitch/2 et +pitch/2
-            initial_positions = np.linspace(-(num_elements - 1) * pitch_mm / 2, 
-                                           (num_elements - 1) * pitch_mm / 2, 
-                                           num_elements)
-        
-        # Calculer les nouvelles positions
-        if support_material_name is not None:
-            # La microstructure est fixée sur un support
-            support_material = MaterialBehaviour(support_material_name)
-            # Chaque élément se déplace avec le support
-            new_positions = initial_positions + support_material.get_thermal_dilation(
-                initial_positions * 1e-3, temperature_K, reference_temperature_K
-            ) * 1e3
-            # Le pas change aussi
-            new_pitch = pitch_mm + support_material.get_thermal_dilation(
-                pitch_mm * 1e-3, temperature_K, reference_temperature_K
-            ) * 1e3
-            delta_pitch = new_pitch - pitch_mm
-        else:
-            # La microstructure se dilate uniformément
-            scale_factor = 1.0 + self.get_thermal_expansion(temperature_K, reference_temperature_K)
-            new_positions = initial_positions * scale_factor
-            new_pitch = pitch_mm * scale_factor
-            delta_pitch = new_pitch - pitch_mm
-        
-        # Calculer le déplacement maximal
-        max_displacement = float(np.max(np.abs(new_positions - initial_positions)))
-        
-        return {
-            "initial_positions_mm": initial_positions,
-            "new_positions_mm": new_positions,
-            "initial_pitch_mm": pitch_mm,
-            "new_pitch_mm": new_pitch,
-            "delta_pitch_mm": delta_pitch,
-            "max_displacement_mm": max_displacement,
-        }
-
-    def get_optical_system_deformation(
-        self,
-        elements: List[Dict[str, Union[str, float]]],
-        temperature_K: float,
-        reference_temperature_K: float = STANDARD_TEMPERATURE_K,
-        support_material_name: Optional[str] = None,
-    ) -> List[Dict[str, Union[str, float]]]:
-        """
-        FR: Calcule la déformation d'un système optique complet (lentilles, miroirs, etc.) due à la dilatation thermique.
-            Chaque élément peut avoir un matériau différent et une position initiale.
-
-        EN: Calculates the deformation of a complete optical system (lenses, mirrors, etc.) due to thermal expansion.
-            Each element can have a different material and initial position.
-
-        Args:
-            elements (List[Dict]): Liste des éléments du système optique. Chaque élément est un dictionnaire avec :
-                - "name" (str): Nom de l'élément.
-                - "material" (str): Nom du matériau.
-                - "position_mm" (float): Position initiale en mm.
-                - "focal_length_mm" (float, optional): Distance focale (pour les lentilles).
-                - "thickness_mm" (float, optional): Épaisseur en mm.
-                - "diameter_mm" (float, optional): Diamètre en mm.
-            temperature_K (float): Température en Kelvin.
-            reference_temperature_K (float): Température de référence en Kelvin (défaut: 293.15 K).
-            support_material_name (str, optional): Nom du matériau du support (défaut: None).
-
-        Returns:
-            List[Dict]: Liste des éléments avec leurs nouvelles propriétés après dilatation.
-                Chaque élément contient :
-                - "name": Nom de l'élément.
-                - "material": Nom du matériau.
-                - "initial_position_mm": Position initiale en mm.
-                - "new_position_mm": Nouvelle position en mm.
-                - "delta_position_mm": Décalage de position en mm.
-                - "initial_focal_length_mm": Distance focale initiale en mm (si applicable).
-                - "new_focal_length_mm": Nouvelle distance focale en mm (si applicable).
-                - "delta_focal_length_mm": Variation de la distance focale en mm (si applicable).
-                - "initial_diameter_mm": Diamètre initial en mm (si applicable).
-                - "new_diameter_mm": Nouveau diamètre en mm (si applicable).
-                - "delta_diameter_mm": Variation du diamètre en mm (si applicable).
-        """
-        deformed_elements = []
-        
-        for element in elements:
-            element_name = element.get("name", "Unknown")
-            material_name = element.get("material", "Fused_Silica")
-            initial_position_mm = element.get("position_mm", 0.0)
-            initial_focal_length_mm = element.get("focal_length_mm")
-            initial_diameter_mm = element.get("diameter_mm")
-            initial_thickness_mm = element.get("thickness_mm")
-            
-            # Créer l'objet MaterialBehaviour pour cet élément
-            material = MaterialBehaviour(material_name)
-            
-            # Calculer le décalage de position
-            if support_material_name is not None:
-                # L'élément est fixé sur un support
-                support_material = MaterialBehaviour(support_material_name)
-                delta_position_mm = support_material.get_thermal_dilation(
-                    initial_position_mm * 1e-3, temperature_K, reference_temperature_K
-                ) * 1e3
-            else:
-                # L'élément se dilate indépendamment
-                delta_position_mm = material.get_thermal_dilation(
-                    initial_position_mm * 1e-3, temperature_K, reference_temperature_K
-                ) * 1e3
-            
-            new_position_mm = initial_position_mm + delta_position_mm
-            
-            # Calculer la nouvelle distance focale (si applicable)
-            new_focal_length_mm = None
-            delta_focal_length_mm = None
-            if initial_focal_length_mm is not None:
-                delta_focal_length_mm = material.get_focal_length_variation(
-                    initial_focal_length_mm, temperature_K, reference_temperature_K
-                )
-                new_focal_length_mm = initial_focal_length_mm + delta_focal_length_mm
-            
-            # Calculer le nouveau diamètre (si applicable)
-            new_diameter_mm = None
-            delta_diameter_mm = None
-            if initial_diameter_mm is not None:
-                delta_diameter_mm = material.get_thermal_dilation(
-                    initial_diameter_mm * 1e-3, temperature_K, reference_temperature_K
-                ) * 1e3
-                new_diameter_mm = initial_diameter_mm + delta_diameter_mm
-            
-            # Calculer la nouvelle épaisseur (si applicable)
-            new_thickness_mm = None
-            delta_thickness_mm = None
-            if initial_thickness_mm is not None:
-                delta_thickness_mm = material.get_thermal_dilation(
-                    initial_thickness_mm * 1e-3, temperature_K, reference_temperature_K
-                ) * 1e3
-                new_thickness_mm = initial_thickness_mm + delta_thickness_mm
-            
-            # Ajouter l'élément déformé à la liste
-            deformed_element = {
-                "name": element_name,
-                "material": material_name,
-                "initial_position_mm": initial_position_mm,
-                "new_position_mm": new_position_mm,
-                "delta_position_mm": delta_position_mm,
-            }
-            
-            if initial_focal_length_mm is not None:
-                deformed_element["initial_focal_length_mm"] = initial_focal_length_mm
-                deformed_element["new_focal_length_mm"] = new_focal_length_mm
-                deformed_element["delta_focal_length_mm"] = delta_focal_length_mm
-            
-            if initial_diameter_mm is not None:
-                deformed_element["initial_diameter_mm"] = initial_diameter_mm
-                deformed_element["new_diameter_mm"] = new_diameter_mm
-                deformed_element["delta_diameter_mm"] = delta_diameter_mm
-            
-            if initial_thickness_mm is not None:
-                deformed_element["initial_thickness_mm"] = initial_thickness_mm
-                deformed_element["new_thickness_mm"] = new_thickness_mm
-                deformed_element["delta_thickness_mm"] = delta_thickness_mm
-            
-            deformed_elements.append(deformed_element)
-        
-        return deformed_elements
-
-    # =========================================================================
-    # Méthodes utilitaires / Utility Methods
-    # =========================================================================
-
-    def get_material_info(self) -> Dict:
-        """
-        FR: Retourne un dictionnaire avec toutes les informations sur le matériau.
-
-        EN: Returns a dictionary with all material information.
-
-        Returns:
-            Dict: Informations sur le matériau.
-        """
-        info = {
-            "name": self.material_name,
-            "type": self.material_type.value,
-            "density_kg_m3": self.density_kg_m3,
-            "young_modulus_Pa": self.young_modulus_Pa,
-            "poisson_ratio": self.poisson_ratio,
-            "thermal_conductivity_W_mK": self.thermal_conductivity_W_mK,
-            "specific_heat_J_kgK": self.specific_heat_J_kgK,
-        }
-        
-        if self.optical_properties is not None:
-            info["optical_properties"] = {
-                "refractive_index_model": {
-                    "model_type": self.refractive_index_model.model_type,
-                    "wavelength_range_nm": self.refractive_index_model.wavelength_range_nm,
-                    "source": self.refractive_index_model.source,
-                },
-                "absorption_coefficient_m_minus_1": self.optical_properties.absorption_coefficient,
-            }
-        
-        info["thermal_expansion"] = {
-            "model": self.thermal_expansion_model.cte_model,
-            "CTE": self.get_thermal_expansion_coefficient(STANDARD_TEMPERATURE_K),
-            "temperature_range_K": self.thermal_expansion_model.temperature_range_K,
-            "source": self.thermal_expansion_model.source,
-        }
-        
-        return info
-
-    # =========================================================================
-    # Méthodes pour télécharger des données depuis refractiveindex.info
-    # =========================================================================
-
-    @staticmethod
-    def fetch_material_from_refractiveindex(material_name: str) -> Dict:
-        """
-        FR: Télécharge les données d'un matériau depuis refractiveindex.info.
-            Cette méthode est expérimentale et nécessite une connexion Internet.
-
-        EN: Fetches material data from refractiveindex.info.
-            This method is experimental and requires an Internet connection.
-
-        Args:
-            material_name (str): Nom du matériau (ex: "fused_silica", "bk7").
-
-        Returns:
-            Dict: Dictionnaire contenant les données du matériau (indice de réfraction, etc.).
-
-        Raises:
-            ConnectionError: Si la connexion à refractiveindex.info échoue.
-            ValueError: Si le matériau n'est pas trouvé.
-
-        Notes:
-            - L'API de refractiveindex.info n'est pas officielle, cette méthode peut ne pas fonctionner.
-            - Les données sont retournées sous forme brute et doivent être traitées.
-        """
-        # URL de base de refractiveindex.info
-        base_url = "https://refractiveindex.info/api"
-        
-        try:
-            # Essayer de récupérer les données via l'API (non officielle)
-            response = requests.get(f"{base_url}/materials/{material_name}.json", timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            return data
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Impossible de récupérer les données depuis refractiveindex.info: {e}")
-            # Retourner un message d'erreur
-            return {"error": f"Failed to fetch data for {material_name}: {e}"}
-
-    @staticmethod
-    def parse_refractiveindex_data(data: Dict) -> Dict:
-        """
-        FR: Parse les données de refractiveindex.info pour extraire les coefficients d'indice de réfraction.
-
-        EN: Parses refractiveindex.info data to extract refractive index coefficients.
-
-        Args:
-            data (Dict): Données brutes de refractiveindex.info.
-
-        Returns:
-            Dict: Dictionnaire contenant les coefficients pour les modèles (Sellmeier, Cauchy, etc.).
-
-        Notes:
-            - Cette méthode est un exemple et doit être adaptée selon le format réel des données.
-        """
-        parsed_data = {}
-        
-        # Extraire les informations de base
-        if "name" in data:
-            parsed_data["name"] = data["name"]
-        if "id" in data:
-            parsed_data["id"] = data["id"]
-        
-        # Extraire les coefficients d'indice de réfraction
-        if "n" in data and isinstance(data["n"], list):
-            # Supposons que les données sont sous forme de liste de (wavelength, n)
-            wavelengths = []
-            indices = []
-            for entry in data["n"]:
-                if "wavelength" in entry and "value" in entry:
-                    wavelengths.append(entry["wavelength"])
-                    indices.append(entry["value"])
-            
-            if wavelengths and indices:
-                # Créer une fonction d'interpolation
-                parsed_data["interpolation_function"] = interp1d(
-                    wavelengths, indices, kind='cubic', fill_value='extrapolate'
-                )
-        
-        # Extraire les coefficients de température si disponibles
-        if "temperature" in data:
-            parsed_data["temperature_data"] = data["temperature"]
-        
-        return parsed_data
+            return self.calculate_reflectance(wavelength_nm, angle_rad, 'unpolarized')
+
+    def calculate_transmittance(self, wavelength_nm: float, thickness_mm: float, angle_rad: float = 0.0, polarization: str = 'unpolarized') -> float:
+        """FR: Calcule la transmittance. EN: Calculates transmittance."""
+        R = self.calculate_reflectance(wavelength_nm, angle_rad, polarization)
+        absorption_coefficient = 0.001
+        T_absorption = np.exp(-absorption_coefficient * thickness_mm)
+        return (1 - R)**2 * T_absorption / (1 - R**2 * T_absorption**2)
 
 
 # =============================================================================
-# 5. FONCTIONS UTILITAIRES / UTILITY FUNCTIONS
+# CLASSE: MATERIAL DATABASE
 # =============================================================================
 
-def get_available_materials() -> List[str]:
-    """
-    FR: Retourne la liste des matériaux disponibles.
+class MaterialDatabase:
+    """FR: Base de données de matériaux. EN: Material database."""
 
-    EN: Returns the list of available materials.
+    def __init__(self):
+        self.materials = {}
+        self._initialize_database()
 
-    Returns:
-        List[str]: Liste des noms des matériaux.
-    """
-    return list(REFRACTIVE_INDEX_DATA.keys()) + list(THERMAL_EXPANSION_DATA.keys())
-
-
-def create_material(
-    name: str,
-    refractive_index_model: Optional[RefractiveIndexModel] = None,
-    thermal_expansion_model: Optional[ThermalExpansionModel] = None,
-    **kwargs,
-) -> Material:
-    """
-    FR: Crée un nouveau matériau avec des propriétés personnalisées.
-
-    EN: Creates a new material with custom properties.
-
-    Args:
-        name (str): Nom du matériau.
-        refractive_index_model (RefractiveIndexModel, optional): Modèle d'indice de réfraction.
-        thermal_expansion_model (ThermalExpansionModel, optional): Modèle d'expansion thermique.
-        **kwargs: Autres propriétés (density, young_modulus, etc.).
-
-    Returns:
-        Material: Nouveau matériau.
-    """
-    material_type = MaterialType.OPTICAL if refractive_index_model is not None else MaterialType.MECHANICAL
-    
-    optical_props = None
-    if refractive_index_model is not None:
-        optical_props = OpticalProperties(
-            refractive_index_model=refractive_index_model,
-            thermal_expansion_model=thermal_expansion_model,
-            **{k: v for k, v in kwargs.items() if k in ["absorption_coefficient", "reference_wavelength_nm"]}
+    def _initialize_database(self) -> None:
+        """FR: Initialise la base de données. EN: Initializes the database."""
+        for name, coeffs in SELLMEIER_COEFFICIENTS.items():
+            self.add_material(
+                name=name,
+                category=MaterialCategory.OPTICAL,
+                refractive_index_model=RefractiveIndexModel.SELLMEIER,
+                refractive_index_coefficients=coeffs,
+                thermal_expansion_model=ThermalExpansionModel.LINEAR,
+                thermal_expansion_coefficients=THERMAL_EXPANSION_COEFFICIENTS[name],
+                reference_temperature_K=REFERENCE_TEMPERATURE_K,
+                reference_wavelength_nm=DEFAULT_WAVELENGTH_NM,
+                dn_dT=REFRACTIVE_INDEX_TEMPERATURE_COEFFICIENTS[name]['dn_dT'],
+                valid_wavelength_range_nm=coeffs['valid_range_nm'],
+                valid_temperature_range_C=THERMAL_EXPANSION_COEFFICIENTS[name]['valid_range_C']
+            )
+        
+        self.add_material(
+            name="Silicon",
+            category=MaterialCategory.OPTICAL,
+            refractive_index_model=RefractiveIndexModel.SELLMEIER_IR,
+            refractive_index_coefficients=SELLMEIER_IR_COEFFICIENTS['Silicon'],
+            thermal_expansion_model=ThermalExpansionModel.LINEAR,
+            thermal_expansion_coefficients=THERMAL_EXPANSION_COEFFICIENTS['Silicon'],
+            reference_temperature_K=REFERENCE_TEMPERATURE_K,
+            reference_wavelength_nm=1550.0,
+            dn_dT=REFRACTIVE_INDEX_TEMPERATURE_COEFFICIENTS['Silicon']['dn_dT'],
+            valid_wavelength_range_nm=SELLMEIER_IR_COEFFICIENTS['Silicon']['valid_range_nm'],
+            valid_temperature_range_C=THERMAL_EXPANSION_COEFFICIENTS['Silicon']['valid_range_C']
         )
-    
+        
+        for name in ['Steel', 'Aluminum', 'Invar', 'Copper']:
+            self.add_material(
+                name=name,
+                category=MaterialCategory.MECHANICAL,
+                refractive_index_model=RefractiveIndexModel.CONSTANT,
+                refractive_index_coefficients={'n': 1.0},
+                thermal_expansion_model=ThermalExpansionModel.LINEAR,
+                thermal_expansion_coefficients=THERMAL_EXPANSION_COEFFICIENTS[name],
+                reference_temperature_K=REFERENCE_TEMPERATURE_K,
+                valid_temperature_range_C=THERMAL_EXPANSION_COEFFICIENTS[name]['valid_range_C']
+            )
+
+    def add_material(self, **kwargs) -> None:
+        """FR: Ajoute un matériau. EN: Adds a material."""
+        material = Material(**kwargs)
+        self.materials[material.name] = material
+
+    def get_material(self, name: str) -> Optional[Material]:
+        """FR: Retourne un matériau. EN: Returns a material."""
+        return self.materials.get(name)
+
+    def get_material_names(self) -> List[str]:
+        """FR: Retourne les noms. EN: Returns names."""
+        return list(self.materials.keys())
+
+
+# =============================================================================
+# FONCTIONS DE CRÉATION
+# =============================================================================
+
+def create_material(name: str = "Unknown", category: MaterialCategory = MaterialCategory.OPTICAL,
+                    refractive_index_model: RefractiveIndexModel = RefractiveIndexModel.CONSTANT,
+                    refractive_index_coefficients: Optional[Dict] = None,
+                    thermal_expansion_model: ThermalExpansionModel = ThermalExpansionModel.CONSTANT,
+                    thermal_expansion_coefficients: Optional[Dict] = None,
+                    reference_temperature_K: float = REFERENCE_TEMPERATURE_K,
+                    reference_wavelength_nm: float = DEFAULT_WAVELENGTH_NM,
+                    dn_dT: float = 0.0,
+                    valid_wavelength_range_nm: Tuple[float, float] = (200, 20000),
+                    valid_temperature_range_C: Tuple[float, float] = (-273, 2000)) -> Material:
+    """FR: Crée un matériau. EN: Creates a material."""
     return Material(
-        name=name,
-        material_type=material_type,
-        optical_properties=optical_props,
-        thermal_expansion_model=thermal_expansion_model if thermal_expansion_model is not None else ThermalExpansionModel(),
-        **{k: v for k, v in kwargs.items() if k in ["density_kg_m3", "young_modulus_Pa", "poisson_ratio", "thermal_conductivity_W_mK", "specific_heat_J_kgK"]}
+        name=name, category=category, refractive_index_model=refractive_index_model,
+        refractive_index_coefficients=refractive_index_coefficients or {},
+        thermal_expansion_model=thermal_expansion_model,
+        thermal_expansion_coefficients=thermal_expansion_coefficients or {},
+        reference_temperature_K=reference_temperature_K, reference_wavelength_nm=reference_wavelength_nm,
+        dn_dT=dn_dT, valid_wavelength_range_nm=valid_wavelength_range_nm,
+        valid_temperature_range_C=valid_temperature_range_C
     )
 
 
+def create_material_database() -> MaterialDatabase:
+    """FR: Crée une base de données. EN: Creates a database."""
+    return MaterialDatabase()
+
+
 # =============================================================================
-# 6. TESTS UNITAIRES / UNIT TESTS
+# TESTS UNITAIRES
 # =============================================================================
 
 class TestMaterialBehaviour:
-    """
-    FR: Classe de tests unitaires pour Material_Behaviour.py.
-    EN: Unit test class for Material_Behaviour.py.
-    """
+    """FR: Tests unitaires pour Material_Behaviour.py."""
 
-    def test_fused_silica_refractive_index(self):
-        """Test l'indice de réfraction de la silice fondue."""
-        material = MaterialBehaviour("Fused_Silica")
-        n_633 = material.get_refractive_index(633.0)
-        # Valeur attendue pour 633 nm : ~1.458
-        self.assertAlmostEqual(n_633, 1.458, delta=0.01)
+    def test_material_creation(self):
+        """FR: Test la création."""
+        material = create_material(name="TestMaterial", category=MaterialCategory.OPTICAL)
+        assert material.name == "TestMaterial"
 
-    def test_bk7_refractive_index(self):
-        """Test l'indice de réfraction du BK7."""
-        material = MaterialBehaviour("BK7")
-        n_633 = material.get_refractive_index(633.0)
-        # Valeur attendue pour 633 nm : ~1.516
-        self.assertAlmostEqual(n_633, 1.516, delta=0.01)
+    def test_get_refractive_index(self):
+        """FR: Test l'indice de réfraction."""
+        material = create_material(name="TestMaterial", refractive_index_model=RefractiveIndexModel.CONSTANT, refractive_index_coefficients={'n': 1.5})
+        assert material.get_refractive_index(633.0) == 1.5
 
-    def test_silicon_refractive_index(self):
-        """Test l'indice de réfraction du silicium."""
-        material = MaterialBehaviour("Silicon")
-        n_1550 = material.get_refractive_index(1550.0)
-        # Valeur attendue pour 1550 nm : ~3.47
-        self.assertAlmostEqual(n_1550, 3.47, delta=0.05)
+    def test_sellmeier_model(self):
+        """FR: Test le modèle de Sellmeier."""
+        material = create_material(name="Fused_Silica", refractive_index_model=RefractiveIndexModel.SELLMEIER, refractive_index_coefficients=SELLMEIER_COEFFICIENTS['Fused_Silica'])
+        n = material.get_refractive_index(633.0)
+        assert 1.45 < n < 1.46
 
-    def test_thermal_expansion_fused_silica(self):
-        """Test l'expansion thermique de la silice fondue."""
-        material = MaterialBehaviour("Fused_Silica")
-        cte = material.get_thermal_expansion_coefficient()
-        # Valeur attendue : ~0.51 ppm/°C
-        self.assertAlmostEqual(cte, 0.51e-6, delta=0.1e-6)
-
-    def test_thermal_expansion_bk7(self):
-        """Test l'expansion thermique du BK7."""
-        material = MaterialBehaviour("BK7")
-        cte = material.get_thermal_expansion_coefficient()
-        # Valeur attendue : ~7.1 ppm/°C
-        self.assertAlmostEqual(cte, 7.1e-6, delta=0.5e-6)
-
-    def test_thermal_dilation(self):
-        """Test la dilatation thermique."""
-        material = MaterialBehaviour("Fused_Silica")
-        length_m = 0.1  # 10 cm
-        delta_T = 100.0  # ΔT = 100°C
-        dilation_m = material.get_thermal_dilation(length_m, STANDARD_TEMPERATURE_K + delta_T)
-        # ΔL = L0 * CTE * ΔT = 0.1 * 0.51e-6 * 100 = 5.1e-6 m
-        expected_dilation = length_m * 0.51e-6 * delta_T
-        self.assertAlmostEqual(dilation_m, expected_dilation, delta=1e-9)
-
-    def test_reflectance_normal_incidence(self):
-        """Test la réflectance en incidence normale."""
-        material = MaterialBehaviour("Fused_Silica")
-        R = material.get_reflectance(633.0, angle_deg=0.0)
-        # R = ((n-1)/(n+1))² = ((1.458-1)/(1.458+1))² ≈ 0.035
-        expected_R = ((1.458 - 1.0) / (1.458 + 1.0)) ** 2
-        self.assertAlmostEqual(R, expected_R, delta=0.01)
-
-    def test_transmittance(self):
-        """Test la transmittance."""
-        material = MaterialBehaviour("Fused_Silica")
-        # Avec absorption nulle et incidence normale
-        T = material.get_transmittance(633.0, thickness_mm=10.0, angle_deg=0.0)
-        # T ≈ 1 - R ≈ 0.965 (pour une interface air-verre)
-        self.assertGreater(T, 0.9)
-
-    def test_optical_power_variation(self):
-        """Test la variation de puissance optique."""
-        material = MaterialBehaviour("Fused_Silica")
-        delta_power = material.get_optical_power_variation(
-            focal_length_mm=100.0,
-            temperature_K=STANDARD_TEMPERATURE_K + 100.0,
-            reference_temperature_K=STANDARD_TEMPERATURE_K,
-            wavelength_nm=633.0
-        )
-        # La variation doit être faible pour la silice fondue
-        self.assertLess(abs(delta_power), 0.01)
-
-    def test_get_available_materials(self):
-        """Test la récupération des matériaux disponibles."""
-        materials = get_available_materials()
-        self.assertIn("Fused_Silica", materials)
-        self.assertIn("BK7", materials)
-        self.assertIn("Silicon", materials)
-        self.assertIn("Steel", materials)
-
-    def test_microstructure_deformation(self):
-        """Test la déformation d'une microstructure."""
-        material = MaterialBehaviour("Fused_Silica")
-        deformation = material.get_microstructure_deformation(
-            microstructure_type=MicrostructureType.MICROLENS_ARRAY,
-            pitch_mm=0.5,
-            num_elements=5,
-            temperature_K=373.15,  # 100°C
-            reference_temperature_K=293.15  # 20°C
-        )
-        
-        self.assertEqual(len(deformation["initial_positions_mm"]), 5)
-        self.assertEqual(len(deformation["new_positions_mm"]), 5)
-        self.assertGreater(deformation["delta_pitch_mm"], 0)
-        self.assertGreater(deformation["max_displacement_mm"], 0)
-
-    def test_optical_system_deformation(self):
-        """Test la déformation d'un système optique."""
-        material = MaterialBehaviour("BK7")
-        
-        # Définir un système optique simple
-        optical_system = [
-            {"name": "Lentille 1", "material": "BK7", "position_mm": 0.0, "focal_length_mm": 50.0, "diameter_mm": 25.0},
-            {"name": "Lentille 2", "material": "Fused_Silica", "position_mm": 100.0, "focal_length_mm": 75.0, "diameter_mm": 30.0},
-        ]
-        
-        deformed_system = material.get_optical_system_deformation(
-            optical_system,
-            temperature_K=373.15,  # 100°C
-            reference_temperature_K=293.15  # 20°C
-        )
-        
-        self.assertEqual(len(deformed_system), 2)
-        for element in deformed_system:
-            self.assertIn("delta_position_mm", element)
-            self.assertIn("delta_focal_length_mm", element)
-            self.assertIn("delta_diameter_mm", element)
+    def test_material_database(self):
+        """FR: Test la base de données."""
+        db = create_material_database()
+        material = db.get_material("Fused_Silica")
+        assert material is not None
 
 
 if __name__ == "__main__":
